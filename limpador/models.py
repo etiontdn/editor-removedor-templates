@@ -12,7 +12,7 @@ class ProcessedImage(models.Model):
         return f"Image {self.id} - {self.uploaded_at}"
 
 class ImageTemplate(models.Model):
-    processed_image = models.ForeignKey(ProcessedImage, related_name='templates', on_delete=models.CASCADE)
+    processed_image = models.ForeignKey(ProcessedImage, related_name='templates', null=True, blank=True, on_delete=models.SET_NULL)
     name = models.CharField(max_length=255)
     image = models.ImageField(upload_to='templates/')
     action_type = models.CharField(max_length=50, default='fill')

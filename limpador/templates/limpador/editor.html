@@ -297,7 +297,7 @@
 <body>
 
     <header class="header">
-        <div class="logo">Limpador PRO</div>
+        <a href="{% url 'home' %}" class="logo" style="text-decoration: none;">Limpador PRO</a>
         <div class="controls">
             <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">Nova Imagem</button>
             <button class="btn" id="btn-save-templates">Salvar Templates</button>
@@ -966,7 +966,8 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert(`Sucesso! ${data.templates.length} template(s) salvo(s).`);
+                    alert(`Sucesso! ${data.templates.length} template(s) salvo(s). A imagem temporária foi apagada.`);
+                    window.location.href = "{% url 'home' %}";
                 } else {
                     alert('Erro ao salvar templates: ' + data.error);
                 }

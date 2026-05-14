@@ -7,6 +7,10 @@ from django.core.files.base import ContentFile
 from io import BytesIO
 from PIL import Image
 
+def home_view(request):
+    templates = ImageTemplate.objects.all().order_by('-created_at')
+    return render(request, 'limpador/home.html', {'templates': templates})
+
 def editor_view(request):
     return render(request, 'limpador/editor.html')
 
@@ -65,10 +69,10 @@ def save_templates(request):
                 actual_w = width * scaleX
                 actual_h = height * scaleY
                 
-                box_left = max(0, int(left - padding))
-                box_top = max(0, int(top - padding))
-                box_right = min(img_width, int(left + actual_w + padding))
-                box_bottom = min(img_height, int(top + actual_h + padding))
+                box_left = max(0, int(left))
+                box_top = max(0, int(top))
+                box_right = min(img_width, int(left + actual_w))
+                box_bottom = min(img_height, int(top + actual_h))
                 
                 if box_right > box_left and box_bottom > box_top:
                     cropped = original_image.crop((box_left, box_top, box_right, box_bottom))
@@ -92,9 +96,28 @@ def save_templates(request):
                         'url': new_template.image.url
                     })
             
+            if processed_img.image:
+                processed_img.image.delete()
+            processed_img.delete()
+            
             return JsonResponse({'success': True, 'templates': saved_templates})
             
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)}, status=500)
             
+    return JsonResponse({'success': False, 'error': 'Método não permitido.'}, status=405)
+
+@csrf_exempt
+def delete_template(request, template_id):
+    if request.method == 'DELETE':
+        try:
+            template = ImageTemplate.objects.get(id=template_id)
+            if template.image:
+                template.image.delete()
+            template.delete()
+            return JsonResponse({'success': True})
+        except ImageTemplate.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Template não encontrado.'}, status=404)
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
     return JsonResponse({'success': False, 'error': 'Método não permitido.'}, status=405)
