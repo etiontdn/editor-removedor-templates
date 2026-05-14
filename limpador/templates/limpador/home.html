@@ -147,7 +147,10 @@
 
     <header class="header">
         <a href="{% url 'home' %}" class="logo">♻️ Editor e Removedor de Templates</a>
-        <a href="{% url 'editor' %}" class="btn">+ Novo Template</a>
+        <div style="display: flex; gap: 10px;">
+            <a href="{% url 'processor' %}" class="btn" style="background: transparent; border: 1px solid var(--accent);">Limpar Pastas (Lote)</a>
+            <a href="{% url 'editor' %}" class="btn">+ Novo Template</a>
+        </div>
     </header>
 
     <div class="container">

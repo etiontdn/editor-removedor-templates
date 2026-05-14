@@ -2,6 +2,7 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import ProcessedImage, ImageTemplate
+from .engine import scan_folders, start_processing_thread, PROCESSING_TASKS
 import json
 from django.core.files.base import ContentFile
 from io import BytesIO
@@ -13,6 +14,9 @@ def home_view(request):
 
 def editor_view(request):
     return render(request, 'limpador/editor.html')
+
+def processor_view(request):
+    return render(request, 'limpador/processor.html')
 
 @csrf_exempt
 def upload_image(request):
@@ -135,3 +139,41 @@ def delete_template(request, template_id):
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)}, status=500)
     return JsonResponse({'success': False, 'error': 'Método não permitido.'}, status=405)
+
+@csrf_exempt
+def scan_folders_api(request):
+    if request.method == 'POST':
+        try:
+            import json
+            data = json.loads(request.body)
+            mother_path = data.get('path', '').strip()
+            folders = scan_folders(mother_path)
+            return JsonResponse({'success': True, 'folders': folders})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=405)
+
+@csrf_exempt
+def start_processing_api(request):
+    if request.method == 'POST':
+        try:
+            import json
+            data = json.loads(request.body)
+            mother_path = data.get('path', '').strip()
+            selected_folders = data.get('folders', [])
+            
+            if not mother_path or not selected_folders:
+                return JsonResponse({'success': False, 'error': 'Caminho ou pastas não selecionadas.'})
+                
+            task_id = start_processing_thread(mother_path, selected_folders)
+            return JsonResponse({'success': True, 'task_id': task_id})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=405)
+
+def get_progress_api(request, task_id):
+    task = PROCESSING_TASKS.get(task_id)
+    if not task:
+        return JsonResponse({'success': False, 'error': 'Tarefa não encontrada.'}, status=404)
+    return JsonResponse({'success': True, 'task': task})
+
