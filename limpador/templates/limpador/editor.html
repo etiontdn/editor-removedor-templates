@@ -300,7 +300,7 @@
         <div class="logo">Limpador PRO</div>
         <div class="controls">
             <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">Nova Imagem</button>
-            <button class="btn" id="btn-processar">Processar & Limpar</button>
+            <button class="btn" id="btn-save-templates">Salvar Templates</button>
         </div>
     </header>
 
@@ -925,6 +925,57 @@
             } catch (error) {
                 console.error(error);
                 alert('Erro na conexão.');
+            }
+        });
+
+        // Save Templates Logic
+        document.getElementById('btn-save-templates').addEventListener('click', async () => {
+            if (!currentImageId) {
+                alert('Nenhuma imagem carregada!');
+                return;
+            }
+            
+            const btn = document.getElementById('btn-save-templates');
+            const originalText = btn.innerText;
+            btn.innerText = 'Salvando...';
+            btn.disabled = true;
+
+            try {
+                // Obter estado atual (ignorando histórico para pegar a forma raw)
+                const state = canvas.toJSON(['id', 'templateName', 'actionType', 'fillColor', 'padding']);
+                const templates = state.objects.filter(obj => obj.id && (obj.id.startsWith('rect_') || obj.id.startsWith('path_')));
+
+                if (templates.length === 0) {
+                    alert('Nenhum template desenhado para salvar!');
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    return;
+                }
+
+                const response = await fetch('/save-templates/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        image_id: currentImageId,
+                        templates: templates
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`Sucesso! ${data.templates.length} template(s) salvo(s).`);
+                } else {
+                    alert('Erro ao salvar templates: ' + data.error);
+                }
+            } catch (error) {
+                console.error(error);
+                alert('Erro na conexão ao tentar salvar.');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
             }
         });
 
