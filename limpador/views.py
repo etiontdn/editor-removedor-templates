@@ -87,7 +87,8 @@ def save_templates(request):
                         image=img_file,
                         action_type=action_type,
                         fill_color=fill_color,
-                        padding=padding
+                        padding=padding,
+                        original_width=img_width
                     )
                     
                     saved_templates.append({

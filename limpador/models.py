@@ -18,6 +18,7 @@ class ImageTemplate(models.Model):
     action_type = models.CharField(max_length=50, default='fill')
     fill_color = models.CharField(max_length=20, default='#ffffff')
     padding = models.IntegerField(default=0)
+    original_width = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
