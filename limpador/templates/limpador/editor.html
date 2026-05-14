@@ -290,8 +290,58 @@
             font-weight: 600;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             padding-bottom: 0.5rem;
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
             color: var(--text-main);
+        }
+
+        /* Custom Color Palette */
+        .color-palette {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .color-swatch {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: transform 0.1s, border-color 0.2s;
+        }
+        .color-swatch:hover {
+            transform: scale(1.1);
+        }
+        .color-swatch.active {
+            border-color: white;
+            box-shadow: 0 0 10px rgba(255,255,255,0.3);
+        }
+        
+        .custom-color-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+            background: rgba(0,0,0,0.2);
+            padding: 8px;
+            border-radius: 8px;
+        }
+        #prop-color {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+        }
+        #prop-color::-webkit-color-swatch-wrapper { padding: 0; }
+        #prop-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+        
+        .hex-display {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: var(--accent);
+            flex: 1;
         }
     </style>
 </head>
@@ -349,7 +399,14 @@
             
             <div class="prop-group" id="group-color">
                 <label>Cor de Preenchimento</label>
-                <input type="color" id="prop-color" class="prop-input" style="padding: 0; height: 35px;" value="#ffffff">
+                <div class="color-palette" id="color-palette">
+                    <!-- Cores serão inseridas via JS -->
+                </div>
+                <div class="custom-color-row">
+                    <input type="color" id="prop-color" value="#ffffff">
+                    <span class="hex-display" id="hex-display">#FFFFFF</span>
+                    <small style="color: var(--text-muted)">Personalizada</small>
+                </div>
             </div>
             
             <div class="prop-group">
@@ -758,7 +815,10 @@
             isPencilMode = true;
             isEraserMode = false;
             canvas.isDrawingMode = !isSpaceDown;
-            canvas.freeDrawingBrush.color = 'rgba(255, 255, 255, 0.8)';
+            
+            // Sincroniza cor do pincel com a cor selecionada no painel
+            const selectedColor = document.getElementById('prop-color').value;
+            canvas.freeDrawingBrush.color = hexToRgba(selectedColor, 0.8);
             canvas.freeDrawingBrush.width = parseInt(document.getElementById('pencil-size').value, 10);
             
             canvas.selection = false;
@@ -770,6 +830,13 @@
             document.getElementById('pencil-options').style.display = 'flex';
             document.getElementById('current-tool-name').innerText = 'Desenhar Livre';
         });
+
+        function hexToRgba(hex, alpha) {
+            let r = parseInt(hex.slice(1, 3), 16),
+                g = parseInt(hex.slice(3, 5), 16),
+                b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
 
         document.getElementById('tool-eraser').addEventListener('click', (e) => {
             isDrawingMode = false;
@@ -817,7 +884,10 @@
                 if (window.activeObj.id && (window.activeObj.id.startsWith('rect_') || window.activeObj.id.startsWith('path_'))) {
                     propName.value = window.activeObj.templateName || '';
                     propAction.value = window.activeObj.actionType || 'fill';
-                    propColor.value = window.activeObj.fillColor || '#ffffff';
+                    
+                    const color = window.activeObj.fillColor || '#ffffff';
+                    updateColorUI(color);
+                    
                     propPadding.value = window.activeObj.padding || 0;
                     
                     updateColorVisibility();
@@ -826,6 +896,21 @@
                 }
             }
             onSelectionCleared();
+        }
+
+        function updateColorUI(hex) {
+            propColor.value = hex;
+            document.getElementById('hex-display').innerText = hex.toUpperCase();
+            
+            // Marcar swatch ativa
+            document.querySelectorAll('.color-swatch').forEach(s => {
+                s.classList.toggle('active', s.dataset.color.toLowerCase() === hex.toLowerCase());
+            });
+
+            // Atualizar pincel se estiver em modo desenho
+            if (canvas.freeDrawingBrush) {
+                canvas.freeDrawingBrush.color = hexToRgba(hex, 0.8);
+            }
         }
 
         function onSelectionCleared() {
@@ -854,8 +939,37 @@
             }
         });
         
+        // Cores pré-definidas (Paleta Premium)
+        const presetColors = [
+            '#ffffff', '#000000', '#3b82f6', '#ef4444', '#22c55e',
+            '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#10b981'
+        ];
+        const paletteContainer = document.getElementById('color-palette');
+        presetColors.forEach(color => {
+            const swatch = document.createElement('div');
+            swatch.className = 'color-swatch';
+            swatch.style.backgroundColor = color;
+            swatch.dataset.color = color;
+            swatch.addEventListener('click', () => {
+                updateColorUI(color);
+                if(window.activeObj) {
+                    window.activeObj.fillColor = color;
+                    window.activeObj.set('fill', hexToRgba(color, 0.8));
+                    canvas.renderAll();
+                    saveHistory();
+                }
+            });
+            paletteContainer.appendChild(swatch);
+        });
+
         propColor.addEventListener('input', (e) => {
-            if(window.activeObj) window.activeObj.fillColor = e.target.value;
+            const color = e.target.value;
+            updateColorUI(color);
+            if(window.activeObj) {
+                window.activeObj.fillColor = color;
+                window.activeObj.set('fill', hexToRgba(color, 0.8));
+                canvas.renderAll();
+            }
         });
         propColor.addEventListener('change', () => { if(window.activeObj) saveHistory(); });
         

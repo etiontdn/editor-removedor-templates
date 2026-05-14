@@ -183,8 +183,17 @@ def process_single_image(img_original, templates_info, threshold):
         th, tw = int(t_info['img'].shape[0] * proporcao), int(t_info['img'].shape[1] * proporcao)
         if tw <= 0 or th <= 0 or tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]: continue
         
-        temp_rescalado = cv2.resize(t_info['img'], (tw, th))
-        temp_bgr, temp_alpha = (temp_rescalado[:, :, :3], temp_rescalado[:, :, 3]) if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else (temp_rescalado, None)
+        interp = cv2.INTER_AREA if proporcao < 1.0 else cv2.INTER_CUBIC
+        temp_rescalado = cv2.resize(t_info['img'], (tw, th), interpolation=interp)
+        
+        # Ignora transparência e foca apenas nas cores (BGR)
+        if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4:
+            temp_bgr = temp_rescalado[:, :, :3].copy()
+        else:
+            temp_bgr = temp_rescalado
+        
+        # Recarrega o alpha original para uso na aplicação (não no matching)
+        temp_alpha_mask = temp_rescalado[:, :, 3] if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else None
         
         match_count = 0
         while match_count < 100:  # Limite de segurança contra loop infinito
@@ -193,7 +202,8 @@ def process_single_image(img_original, templates_info, threshold):
                 print(f"[DEBUG] Template {t_info['name']} maior que a imagem restante. Pulando.")
                 break
 
-            res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha) if temp_alpha is not None else cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
+            # Sempre usa TM_CCOEFF_NORMED para considerar cores e ser mais robusto que TM_CCORR com mask
+            res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             if max_val < threshold: break
             
@@ -206,11 +216,39 @@ def process_single_image(img_original, templates_info, threshold):
             
             if t_info['action_type'] == 'fill':
                 print(f"[DEBUG] Match found! Template: {t_info['name']} (Score: {max_val:.4f}). Action: FILL em {x_ini, y_ini}")
-                cv2.rectangle(img_trabalho, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
-                if img_original is not img_trabalho: cv2.rectangle(img_original, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
+                
+                if temp_alpha_mask is not None:
+                    # Aplicação mascarada para formatos variados
+                    roi_trabalho = img_trabalho[y_ini:y_fim, x_ini:x_fim]
+                    roi_original = img_original[y_ini:y_fim, x_ini:x_fim]
+                    
+                    # Redimensionar máscara se o padding alterou o tamanho esperado
+                    m_h, m_w = roi_trabalho.shape[:2]
+                    mask_resized = cv2.resize(temp_alpha_mask, (m_w, m_h), interpolation=cv2.INTER_AREA)
+                    mask_bool = mask_resized > 10 # Limiar para a máscara
+                    
+                    # Criar uma cor sólida compatível com o número de canais
+                    if roi_original.shape[2] == 4:
+                        # Para RGBA, preenchemos BGR e definimos Alpha como 255
+                        roi_original[mask_bool, :3] = t_info['fill_color']
+                        roi_original[mask_bool, 3] = 255
+                    else:
+                        roi_original[mask_bool] = t_info['fill_color']
+                    
+                    # Atualiza imagem de trabalho (sempre BGR)
+                    roi_trabalho[mask_bool] = t_info['fill_color']
+                else:
+                    # Retangular padrão
+                    cv2.rectangle(img_trabalho, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
+                    if img_original is not img_trabalho: cv2.rectangle(img_original, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
+                
                 alterou = True
             elif t_info['action_type'] == 'cut_y':
                 print(f"[DEBUG] Match found! Template: {t_info['name']} (Score: {max_val:.4f}). Action: CUT_Y em y={y_ini}")
+                
+                # Se o template tiver máscara (alpha), usamos ela para um corte mais preciso se possível,
+                # mas para CUT_Y (que remove a linha inteira) o retângulo costuma ser suficiente.
+                # Se quiser um corte que respeite a forma lateral, seria 'cut_shape', mas aqui focamos no eixo Y.
                 img_trabalho = np.vstack([img_trabalho[:y_ini, :], img_trabalho[y_fim:, :]])
                 img_original = np.vstack([img_original[:y_ini, :], img_original[y_fim:, :]])
                 alterou = True
@@ -235,14 +273,26 @@ def process_transition(path_a, path_b, templates_info, threshold):
     for t_info in templates_info:
         proporcao = w_a / t_info['original_width'] if t_info['original_width'] > 0 else 1.0
         th, tw = int(t_info['img'].shape[0] * proporcao), int(t_info['img'].shape[1] * proporcao)
-        temp_rescalado = cv2.resize(t_info['img'], (tw, th))
-        temp_bgr, temp_alpha = (temp_rescalado[:, :, :3], temp_rescalado[:, :, 3]) if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else (temp_rescalado, None)
+        interp = cv2.INTER_AREA if proporcao < 1.0 else cv2.INTER_CUBIC
+        temp_rescalado = cv2.resize(t_info['img'], (tw, th), interpolation=interp)
+        
+        # Ignora transparência e foca apenas nas cores (BGR)
+        if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4:
+            temp_bgr = temp_rescalado[:, :, :3].copy()
+        else:
+            temp_bgr = temp_rescalado
+        
+        # Recarrega o alpha original para uso na aplicação (não no matching)
+        temp_alpha_mask = temp_rescalado[:, :, 3] if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else None
+        
+        temp_alpha = None # Desativado conforme solicitado
         
         # Verifica se cabe na ponte
         if tw > ponte_trabalho.shape[1] or th > ponte_trabalho.shape[0]:
             continue
 
-        res = cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha) if temp_alpha is not None else cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
+        # Sempre usa TM_CCOEFF_NORMED para considerar cores
+        res = cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
         if max_val >= threshold:
@@ -252,12 +302,50 @@ def process_transition(path_a, path_b, templates_info, threshold):
                 y_ini, y_fim = y_topo - padding, y_topo + th + padding
                 if t_info['action_type'] == 'fill':
                     print(f"[DEBUG] Transition match! Template: {t_info['name']} (Score: {max_val:.4f}). Action: FILL transição")
-                    if y_ini < h_a:
-                        cv2.rectangle(img_a, (0, max(0, y_ini)), (w_a, min(h_a, y_fim)), t_info['fill_color'], -1)
-                        alterou_a = True
-                    if y_fim > h_a:
-                        cv2.rectangle(img_b, (0, max(0, y_ini - h_a)), (w_a, min(img_b.shape[0], y_fim - h_a)), t_info['fill_color'], -1)
-                        alterou_b = True
+                    
+                    if temp_alpha_mask is not None:
+                        # Aplicação mascarada na transição
+                        # Cria uma máscara para a área da transição na ponte
+                        y_fim = y_topo + th
+                        padding = int(t_info['padding'] * proporcao)
+                        y_ini_p, y_fim_p = max(0, y_topo - padding), min(ponte.shape[0], y_topo + th + padding)
+                        
+                        mask_resized = cv2.resize(temp_alpha_mask, (w_a, y_fim_p - y_ini_p), interpolation=cv2.INTER_AREA)
+                        color_fill = np.full((y_fim_p - y_ini_p, w_a, 3), t_info['fill_color'], dtype=np.uint8)
+                        mask_bool = mask_resized > 10
+                        
+                        # Divide a aplicação entre imagem A e B
+                        if y_ini_p < h_a:
+                            h_in_a = min(h_a, y_fim_p) - y_ini_p
+                            roi_a = img_a[y_ini_p : y_ini_p + h_in_a, :]
+                            m_a = mask_bool[0 : h_in_a, :]
+                            
+                            if roi_a.shape[2] == 4:
+                                roi_a[m_a, :3] = t_info['fill_color']
+                                roi_a[m_a, 3] = 255
+                            else:
+                                roi_a[m_a] = t_info['fill_color']
+                            alterou_a = True
+                            
+                        if y_fim_p > h_a:
+                            h_in_b = y_fim_p - max(h_a, y_ini_p)
+                            start_in_b = max(0, y_ini_p - h_a)
+                            roi_b = img_b[start_in_b : start_in_b + h_in_b, :]
+                            m_b = mask_bool[mask_bool.shape[0] - h_in_b : , :]
+                            
+                            if roi_b.shape[2] == 4:
+                                roi_b[m_b, :3] = t_info['fill_color']
+                                roi_b[m_b, 3] = 255
+                            else:
+                                roi_b[m_b] = t_info['fill_color']
+                            alterou_b = True
+                    else:
+                        if y_ini < h_a:
+                            cv2.rectangle(img_a, (0, max(0, y_ini)), (w_a, min(h_a, y_fim)), t_info['fill_color'], -1)
+                            alterou_a = True
+                        if y_fim > h_a:
+                            cv2.rectangle(img_b, (0, max(0, y_ini - h_a)), (w_a, min(img_b.shape[0], y_fim - h_a)), t_info['fill_color'], -1)
+                            alterou_b = True
                 elif t_info['action_type'] == 'cut_y':
                     print(f"[DEBUG] Transition match! Template: {t_info['name']} (Score: {max_val:.4f}). Action: CUT_Y transição")
                     if y_ini < h_a:
