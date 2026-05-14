@@ -688,6 +688,10 @@
                             rect.set({ fill: 'rgba(255, 255, 255, 0.8)'});
                             rect.id = 'rect_' + new Date().getTime();
                             createFloatingLabel(rect);
+                            
+                            canvas.setActiveObject(rect);
+                            document.getElementById('tool-select').click();
+                            
                             canvas.renderAll();
                             saveHistory();
                         }
@@ -711,6 +715,10 @@
                     padding: 0
                 });
                 createFloatingLabel(path);
+                
+                canvas.setActiveObject(path);
+                document.getElementById('tool-select').click();
+                
                 saveHistory();
             }
         });
