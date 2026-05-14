@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Limpador de Anúncios PRO</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: rgba(30, 41, 59, 0.7);
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header / Navbar */
+        .header {
+            background: var(--panel-bg);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 10;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        /* Main Workspace */
+        .workspace {
+            display: flex;
+            flex: 1;
+            position: relative;
+        }
+
+        /* Canvas Container */
+        .canvas-container-wrapper {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            background-color: #020617;
+            position: relative;
+        }
+
+        /* Custom Scrollbar for tools */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+
+        /* Upload Overlay */
+        .upload-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(15, 23, 42, 0.9);
+            z-index: 5;
+            transition: opacity 0.3s ease;
+        }
+
+        .upload-box {
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            padding: 3rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .upload-box:hover {
+            border-color: var(--accent);
+        }
+
+        #file-input {
+            display: none;
+        }
+        
+        /* Floating Toolbar */
+        .toolbar {
+            position: absolute;
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--panel-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            z-index: 10;
+        }
+
+        .tool-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-main);
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 1.2rem;
+        }
+
+        .tool-btn:hover, .tool-btn.active {
+            background: rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <div class="logo">Limpador PRO</div>
+        <div class="controls">
+            <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">Nova Imagem</button>
+            <button class="btn" id="btn-processar">Processar & Limpar</button>
+        </div>
+    </header>
+
+    <div class="workspace">
+        <!-- Floating Toolbar -->
+        <div class="toolbar" id="toolbar" style="display: none;">
+            <button class="tool-btn active" id="tool-select" title="Selecionar/Mover">🖱️</button>
+            <button class="tool-btn" id="tool-draw" title="Desenhar Retângulo">⬜</button>
+        </div>
+
+        <div class="canvas-container-wrapper" id="canvas-wrapper">
+            <canvas id="editor-canvas"></canvas>
+            
+            <div class="upload-overlay" id="upload-overlay">
+                <div class="upload-box" onclick="document.getElementById('file-input').click()">
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">📁</div>
+                    <h3>Selecione uma Imagem</h3>
+                    <p style="color: var(--text-muted)">ou arraste e solte aqui</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="file-input" accept="image/*">
+
+    <script>
+        // Init Fabric Canvas
+        const canvas = new fabric.Canvas('editor-canvas', {
+            width: window.innerWidth,
+            height: window.innerHeight - 70, // subtract header height
+            selection: true
+        });
+
+        let currentImageId = null;
+        let isDrawingMode = false;
+        let rect, isDown, origX, origY;
+
+        // Resize canvas on window resize
+        window.addEventListener('resize', () => {
+            canvas.setWidth(window.innerWidth);
+            canvas.setHeight(window.innerHeight - 70);
+            canvas.renderAll();
+        });
+
+        // Zoom Logic (Mouse Wheel)
+        canvas.on('mouse:wheel', function(opt) {
+            var delta = opt.e.deltaY;
+            var zoom = canvas.getZoom();
+            zoom *= 0.999 ** delta;
+            if (zoom > 20) zoom = 20;
+            if (zoom < 0.1) zoom = 0.1;
+            canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+            opt.e.preventDefault();
+            opt.e.stopPropagation();
+        });
+
+        // Pan Logic (Alt + Click ou Middle Mouse Button)
+        canvas.on('mouse:down', function(opt) {
+            var evt = opt.e;
+            // Middle click (1) or Alt key for panning
+            if (evt.button === 1 || evt.altKey) {
+                this.isDragging = true;
+                this.selection = false;
+                this.lastPosX = evt.clientX;
+                this.lastPosY = evt.clientY;
+            } 
+            else if (isDrawingMode) {
+                // Drawing Rectangle Mode
+                isDown = true;
+                var pointer = canvas.getPointer(opt.e);
+                origX = pointer.x;
+                origY = pointer.y;
+                rect = new fabric.Rect({
+                    left: origX,
+                    top: origY,
+                    originX: 'left',
+                    originY: 'top',
+                    width: pointer.x - origX,
+                    height: pointer.y - origY,
+                    angle: 0,
+                    fill: 'rgba(255, 255, 255, 0.5)',
+                    stroke: '#3b82f6',
+                    strokeWidth: 2,
+                    transparentCorners: false
+                });
+                canvas.add(rect);
+            }
+        });
+
+        canvas.on('mouse:move', function(opt) {
+            if (this.isDragging) {
+                var e = opt.e;
+                var vpt = this.viewportTransform;
+                vpt[4] += e.clientX - this.lastPosX;
+                vpt[5] += e.clientY - this.lastPosY;
+                this.requestRenderAll();
+                this.lastPosX = e.clientX;
+                this.lastPosY = e.clientY;
+            }
+            else if (isDrawingMode && isDown) {
+                var pointer = canvas.getPointer(opt.e);
+                
+                if(origX > pointer.x){
+                    rect.set({ left: Math.abs(pointer.x) });
+                }
+                if(origY > pointer.y){
+                    rect.set({ top: Math.abs(pointer.y) });
+                }
+                
+                rect.set({ width: Math.abs(origX - pointer.x) });
+                rect.set({ height: Math.abs(origY - pointer.y) });
+                
+                canvas.renderAll();
+            }
+        });
+
+        canvas.on('mouse:up', function(opt) {
+            this.isDragging = false;
+            this.selection = true;
+            if(isDrawingMode){
+                isDown = false;
+                if(rect){
+                    // Se o retângulo for muito pequeno, remove (clique acidental)
+                    if(rect.width < 5 || rect.height < 5) {
+                        canvas.remove(rect);
+                    } else {
+                        // Reseta a cor para o patch branco final (ou mantém semi-transparente para edição)
+                        rect.set({ fill: 'rgba(255, 255, 255, 0.8)'});
+                        canvas.renderAll();
+                    }
+                }
+            }
+        });
+
+        // Toolbar Logic
+        document.getElementById('tool-select').addEventListener('click', (e) => {
+            isDrawingMode = false;
+            canvas.selection = true;
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            canvas.defaultCursor = 'default';
+        });
+
+        document.getElementById('tool-draw').addEventListener('click', (e) => {
+            isDrawingMode = true;
+            canvas.selection = false; // disable selection while drawing
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            canvas.defaultCursor = 'crosshair';
+            canvas.discardActiveObject();
+            canvas.renderAll();
+        });
+
+
+        // Upload Logic
+        const fileInput = document.getElementById('file-input');
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            try {
+                // Show some loading state if needed
+                document.getElementById('upload-overlay').innerHTML = '<h2>Carregando...</h2>';
+
+                const response = await fetch('/upload/', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentImageId = data.image_id;
+                    document.getElementById('upload-overlay').style.display = 'none';
+                    document.getElementById('toolbar').style.display = 'flex';
+                    
+                    // Load image into Fabric Canvas
+                    fabric.Image.fromURL(data.image_url, function(img) {
+                        // Reset canvas
+                        canvas.clear();
+                        canvas.setViewportTransform([1,0,0,1,0,0]);
+
+                        // Set image as background (or interactive object)
+                        // Here we use it as background so we can draw patches over it
+                        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+                            originX: 'left',
+                            originY: 'top',
+                        });
+
+                        // Center the image if it's smaller than canvas, or scale it down
+                        let scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+                        if(scale > 1) scale = 1; // Don't upscale
+                        
+                        canvas.setZoom(scale);
+                        
+                        // Center panning
+                        const vpt = canvas.viewportTransform;
+                        vpt[4] = (canvas.width - img.width * scale) / 2;
+                        vpt[5] = (canvas.height - img.height * scale) / 2;
+                        canvas.requestRenderAll();
+                    });
+                } else {
+                    alert('Erro no upload: ' + data.error);
+                    document.getElementById('upload-overlay').innerHTML = '<h2>Erro. Tente novamente.</h2>';
+                }
+            } catch (error) {
+                console.error(error);
+                alert('Erro na conexão.');
+            }
+        });
+
+    </script>
+</body>
+</html>
