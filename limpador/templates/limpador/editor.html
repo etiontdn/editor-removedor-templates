@@ -172,6 +172,34 @@
             background: rgba(255,255,255,0.1);
         }
 
+        /* Tooltip */
+        .tool-btn {
+            position: relative;
+        }
+        .tool-btn:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 120%;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--panel-bg);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: 6px;
+            white-space: nowrap;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 100;
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            opacity: 0;
+            animation: fadeIn 0.2s forwards 0.3s; /* Delay to show tooltip */
+        }
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
         /* Floating Label */
         .floating-label {
             position: absolute;
@@ -209,10 +237,10 @@
     <div class="workspace">
         <!-- Floating Toolbar -->
         <div class="toolbar" id="toolbar" style="display: none;">
-            <button class="tool-btn active" id="tool-select" title="Selecionar/Mover (V)">🖱️</button>
-            <button class="tool-btn" id="tool-draw" title="Desenhar Retângulo (M)">⬜</button>
-            <button class="tool-btn" id="tool-pencil" title="Desenhar Livre (B)">✏️</button>
-            <button class="tool-btn" id="tool-eraser" title="Apagar Formas (E)">🧽</button>
+            <button class="tool-btn active" id="tool-select" data-tooltip="Selecionar/Mover (V)">🖱️</button>
+            <button class="tool-btn" id="tool-draw" data-tooltip="Desenhar Retângulo (M)">⬜</button>
+            <button class="tool-btn" id="tool-pencil" data-tooltip="Desenhar Livre (B)">✏️</button>
+            <button class="tool-btn" id="tool-eraser" data-tooltip="Apagar Formas (E)">🧽</button>
             
             <div id="pencil-options" style="display: none; flex-direction: column; gap: 5px; margin-top: 10px;">
                 <label for="pencil-size" style="font-size: 10px; color: var(--text-muted); text-align: center;">Tamanho</label>
@@ -250,19 +278,69 @@
         let isSpaceDown = false;
         let templateCount = 0;
         let rect, isDown, origX, origY;
+        
+        // History Logic
+        let historyStack = [];
+        let historyIndex = -1;
+        let isHistoryRestoring = false;
 
-        function createFloatingLabel(obj) {
-            templateCount++;
+        function saveHistory() {
+            if (isHistoryRestoring) return;
+            const state = canvas.toJSON(['id', 'templateName']);
+            if (historyIndex < historyStack.length - 1) {
+                historyStack = historyStack.slice(0, historyIndex + 1);
+            }
+            historyStack.push(state);
+            if (historyStack.length > 6) { // Keep base state + 5 actions
+                historyStack.shift();
+            }
+            historyIndex = historyStack.length - 1;
+        }
+
+        function restoreHistory(index) {
+            if (index < 0 || index >= historyStack.length) return;
+            isHistoryRestoring = true;
+            
+            canvas.loadFromJSON(historyStack[index], function() {
+                // Clear all current DOM labels
+                document.querySelectorAll('.floating-label').forEach(el => el.remove());
+                
+                // Re-create labels for loaded objects
+                canvas.getObjects().forEach(obj => {
+                    if (obj.templateName) {
+                        const match = obj.templateName.match(/template_(\d+)/);
+                        if (match && parseInt(match[1]) > templateCount) {
+                            templateCount = parseInt(match[1]);
+                        }
+                    }
+                    if(obj.id && (obj.id.startsWith('rect_') || obj.id.startsWith('path_'))) {
+                         createFloatingLabel(obj, true);
+                    }
+                });
+                
+                canvas.renderAll();
+                isHistoryRestoring = false;
+                historyIndex = index;
+            });
+        }
+
+        function createFloatingLabel(obj, restoring = false) {
+            if (!restoring) {
+                templateCount++;
+                obj.templateName = `template_${templateCount}`;
+            }
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'floating-label';
-            input.value = `template_${templateCount}`;
+            input.value = obj.templateName;
             input.id = `label_${obj.id}`;
             document.getElementById('canvas-wrapper').appendChild(input);
             
-            obj.templateName = input.value;
             input.addEventListener('input', (e) => {
                 obj.templateName = e.target.value;
+            });
+            input.addEventListener('blur', (e) => {
+                saveHistory();
             });
             
             updateLabelPosition(obj, input);
@@ -295,16 +373,34 @@
                 if (input) input.remove();
             }
         });
+        
+        canvas.on('object:modified', function(opt) {
+            saveHistory();
+        });
 
         window.addEventListener('keydown', (e) => {
             // Ignore if typing in input
             if (document.activeElement.tagName === 'INPUT') return;
+
+            // Undo: Ctrl + Z
+            if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                restoreHistory(historyIndex - 1);
+                return;
+            }
+            // Redo: Ctrl + Shift + Z or Ctrl + Y
+            if ((e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z') || (e.ctrlKey && e.key.toLowerCase() === 'y')) {
+                e.preventDefault();
+                restoreHistory(historyIndex + 1);
+                return;
+            }
 
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 const activeObjects = canvas.getActiveObjects();
                 if (activeObjects.length) {
                     canvas.discardActiveObject();
                     activeObjects.forEach(obj => canvas.remove(obj));
+                    saveHistory();
                 }
                 return;
             }
@@ -382,6 +478,7 @@
                 if (opt.target) {
                     canvas.remove(opt.target);
                     canvas.discardActiveObject();
+                    saveHistory();
                 }
             }
             else if (isDrawingMode) {
@@ -464,6 +561,7 @@
                             rect.id = 'rect_' + new Date().getTime();
                             createFloatingLabel(rect);
                             canvas.renderAll();
+                            saveHistory();
                         }
                         rect = null;
                     }
@@ -481,6 +579,7 @@
                     selectable: true
                 });
                 createFloatingLabel(path);
+                saveHistory();
             }
         });
 
@@ -599,6 +698,11 @@
                         vpt[4] = (canvas.width - img.width * scale) / 2;
                         vpt[5] = (canvas.height - img.height * scale) / 2;
                         canvas.requestRenderAll();
+                        
+                        // Initialize History
+                        historyStack = [];
+                        historyIndex = -1;
+                        saveHistory();
                     });
                 } else {
                     alert('Erro no upload: ' + data.error);
