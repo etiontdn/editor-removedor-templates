@@ -952,6 +952,29 @@
                     return;
                 }
 
+                // Extrair máscaras para os caminhos de formato livre
+                for (let tpl of templates) {
+                    if (tpl.id && tpl.id.startsWith('path_')) {
+                        let obj = canvas.getObjects().find(o => o.id === tpl.id);
+                        if (obj) {
+                            const origFill = obj.fill;
+                            const origStroke = obj.stroke;
+                            const origOpacity = obj.opacity;
+                            
+                            // Transformar em uma silhueta totalmente opaca
+                            obj.set({ fill: 'black', opacity: 1 });
+                            if (origStroke) {
+                                obj.set({ stroke: 'black' });
+                            }
+                            
+                            tpl.mask_base64 = obj.toDataURL({ format: 'png', multiplier: 1 });
+                            
+                            // Restaurar visual
+                            obj.set({ fill: origFill, stroke: origStroke, opacity: origOpacity });
+                        }
+                    }
+                }
+
                 const response = await fetch('/save-templates/', {
                     method: 'POST',
                     headers: {

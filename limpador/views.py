@@ -75,7 +75,20 @@ def save_templates(request):
                 box_bottom = min(img_height, int(top + actual_h))
                 
                 if box_right > box_left and box_bottom > box_top:
-                    cropped = original_image.crop((box_left, box_top, box_right, box_bottom))
+                    cropped = original_image.crop((box_left, box_top, box_right, box_bottom)).convert("RGBA")
+                    
+                    mask_base64 = tpl.get('mask_base64')
+                    if mask_base64:
+                        import base64
+                        if ',' in mask_base64:
+                            mask_base64 = mask_base64.split(',')[1]
+                        
+                        mask_data = base64.b64decode(mask_base64)
+                        mask_img = Image.open(BytesIO(mask_data)).convert("RGBA")
+                        mask_img = mask_img.resize(cropped.size, Image.Resampling.LANCZOS)
+                        
+                        alpha_mask = mask_img.split()[3]
+                        cropped.putalpha(alpha_mask)
                     
                     img_io = BytesIO()
                     cropped.save(img_io, format='PNG')
