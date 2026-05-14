@@ -222,6 +222,72 @@
             background: rgba(15, 23, 42, 1);
             border-color: #60a5fa;
         }
+
+        /* Status Bar */
+        .status-bar {
+            background: var(--panel-bg);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.3rem 1rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            z-index: 10;
+        }
+
+        /* Properties Panel */
+        .properties-panel {
+            width: 0;
+            background: var(--panel-bg);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            transition: width 0.3s ease;
+            white-space: nowrap;
+        }
+        .properties-panel.open {
+            width: 300px;
+            padding: 1.5rem;
+        }
+
+        .prop-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .prop-group label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .prop-input {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: var(--text-main);
+            padding: 0.5rem;
+            border-radius: 6px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .prop-input:focus {
+            border-color: var(--accent);
+        }
+        
+        .prop-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+            color: var(--text-main);
+        }
     </style>
 </head>
 <body>
@@ -259,6 +325,37 @@
                 </div>
             </div>
         </div>
+
+        <div class="properties-panel" id="properties-panel">
+            <div class="prop-title">Propriedades do Template</div>
+            
+            <div class="prop-group">
+                <label>Nome do Template</label>
+                <input type="text" id="prop-name" class="prop-input">
+            </div>
+            
+            <div class="prop-group">
+                <label>Ação</label>
+                <select id="prop-action" class="prop-input">
+                    <option value="fill">Preenchimento por cor</option>
+                    <option value="cut_y">Corte no eixo Y</option>
+                </select>
+            </div>
+            
+            <div class="prop-group" id="group-color">
+                <label>Cor de Preenchimento</label>
+                <input type="color" id="prop-color" class="prop-input" style="padding: 0; height: 35px;" value="#ffffff">
+            </div>
+            
+            <div class="prop-group">
+                <label>Padding (px)</label>
+                <input type="number" id="prop-padding" class="prop-input" value="0">
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar" id="status-bar">
+        Ferramenta Atual: <strong id="current-tool-name" style="margin-left: 5px; color: var(--text-main)">Selecionar/Mover</strong>
     </div>
 
     <input type="file" id="file-input" accept="image/*">
@@ -286,7 +383,7 @@
 
         function saveHistory() {
             if (isHistoryRestoring) return;
-            const state = canvas.toJSON(['id', 'templateName']);
+            const state = canvas.toJSON(['id', 'templateName', 'actionType', 'fillColor', 'padding']);
             if (historyIndex < historyStack.length - 1) {
                 historyStack = historyStack.slice(0, historyIndex + 1);
             }
@@ -338,6 +435,7 @@
             
             input.addEventListener('input', (e) => {
                 obj.templateName = e.target.value;
+                if(window.activeObj === obj) document.getElementById('prop-name').value = e.target.value;
             });
             input.addEventListener('blur', (e) => {
                 saveHistory();
@@ -442,12 +540,19 @@
             }
         });
 
-        // Resize canvas on window resize
-        window.addEventListener('resize', () => {
-            canvas.setWidth(window.innerWidth);
-            canvas.setHeight(window.innerHeight - 70);
-            canvas.renderAll();
+        // Resize canvas on wrapper resize
+        const wrapper = document.getElementById('canvas-wrapper');
+        const resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                if(entry.contentRect.width > 0 && entry.contentRect.height > 0){
+                    canvas.setWidth(entry.contentRect.width);
+                    canvas.setHeight(entry.contentRect.height);
+                    canvas.renderAll();
+                    updateAllLabels();
+                }
+            }
         });
+        resizeObserver.observe(wrapper);
 
         // Zoom Logic (Mouse Wheel)
         canvas.on('mouse:wheel', function(opt) {
@@ -498,7 +603,10 @@
                     fill: 'rgba(255, 255, 255, 0.5)',
                     stroke: '#3b82f6',
                     strokeWidth: 2,
-                    transparentCorners: false
+                    transparentCorners: false,
+                    actionType: 'fill',
+                    fillColor: '#ffffff',
+                    padding: 0
                 });
                 canvas.add(rect);
             }
@@ -576,7 +684,10 @@
                 path.id = 'path_' + new Date().getTime();
                 path.set({
                     fill: 'rgba(255, 255, 255, 0.8)',
-                    selectable: true
+                    selectable: true,
+                    actionType: 'fill',
+                    fillColor: '#ffffff',
+                    padding: 0
                 });
                 createFloatingLabel(path);
                 saveHistory();
@@ -594,6 +705,7 @@
             e.currentTarget.classList.add('active');
             canvas.defaultCursor = isSpaceDown ? 'grab' : 'default';
             document.getElementById('pencil-options').style.display = 'none';
+            document.getElementById('current-tool-name').innerText = 'Selecionar/Mover';
         });
 
         document.getElementById('tool-draw').addEventListener('click', (e) => {
@@ -608,6 +720,7 @@
             canvas.discardActiveObject();
             canvas.renderAll();
             document.getElementById('pencil-options').style.display = 'none';
+            document.getElementById('current-tool-name').innerText = 'Desenhar Retângulo';
         });
 
         document.getElementById('tool-pencil').addEventListener('click', (e) => {
@@ -625,6 +738,7 @@
             canvas.discardActiveObject();
             canvas.renderAll();
             document.getElementById('pencil-options').style.display = 'flex';
+            document.getElementById('current-tool-name').innerText = 'Desenhar Livre';
         });
 
         document.getElementById('tool-eraser').addEventListener('click', (e) => {
@@ -640,6 +754,7 @@
             canvas.discardActiveObject();
             canvas.renderAll();
             document.getElementById('pencil-options').style.display = 'none';
+            document.getElementById('current-tool-name').innerText = 'Apagar Formas';
         });
 
         document.getElementById('pencil-size').addEventListener('input', (e) => {
@@ -648,6 +763,76 @@
             }
         });
 
+
+        // Properties Sidebar Logic
+        const propertiesPanel = document.getElementById('properties-panel');
+        const propName = document.getElementById('prop-name');
+        const propAction = document.getElementById('prop-action');
+        const propColor = document.getElementById('prop-color');
+        const propPadding = document.getElementById('prop-padding');
+        const groupColor = document.getElementById('group-color');
+        window.activeObj = null;
+
+        function updateColorVisibility() {
+            if (propAction.value === 'fill') {
+                groupColor.style.display = 'flex';
+            } else {
+                groupColor.style.display = 'none';
+            }
+        }
+
+        function onObjectSelected(opt) {
+            if (opt.selected.length === 1) {
+                window.activeObj = opt.selected[0];
+                if (window.activeObj.id && (window.activeObj.id.startsWith('rect_') || window.activeObj.id.startsWith('path_'))) {
+                    propName.value = window.activeObj.templateName || '';
+                    propAction.value = window.activeObj.actionType || 'fill';
+                    propColor.value = window.activeObj.fillColor || '#ffffff';
+                    propPadding.value = window.activeObj.padding || 0;
+                    
+                    updateColorVisibility();
+                    propertiesPanel.classList.add('open');
+                    return;
+                }
+            }
+            onSelectionCleared();
+        }
+
+        function onSelectionCleared() {
+            window.activeObj = null;
+            propertiesPanel.classList.remove('open');
+        }
+
+        canvas.on('selection:created', onObjectSelected);
+        canvas.on('selection:updated', onObjectSelected);
+        canvas.on('selection:cleared', onSelectionCleared);
+
+        propName.addEventListener('input', (e) => {
+            if(window.activeObj) {
+                window.activeObj.templateName = e.target.value;
+                const label = document.getElementById(`label_${window.activeObj.id}`);
+                if (label) label.value = e.target.value;
+            }
+        });
+        propName.addEventListener('blur', () => { if(window.activeObj) saveHistory(); });
+        
+        propAction.addEventListener('change', (e) => {
+            if(window.activeObj) {
+                window.activeObj.actionType = e.target.value;
+                updateColorVisibility();
+                saveHistory();
+            }
+        });
+        
+        propColor.addEventListener('input', (e) => {
+            if(window.activeObj) window.activeObj.fillColor = e.target.value;
+        });
+        propColor.addEventListener('change', () => { if(window.activeObj) saveHistory(); });
+        
+        propPadding.addEventListener('input', (e) => {
+            if(window.activeObj) window.activeObj.padding = parseInt(e.target.value, 10) || 0;
+        });
+        propPadding.addEventListener('change', () => { if(window.activeObj) saveHistory(); });
 
         // Upload Logic
         const fileInput = document.getElementById('file-input');
