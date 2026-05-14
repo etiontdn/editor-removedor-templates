@@ -451,7 +451,7 @@
 
         function updateLabelPosition(obj, input) {
             if(!input || !obj.canvas) return;
-            const bound = obj.getBoundingRect(true, true);
+            const bound = obj.getBoundingRect(false, true);
             input.style.left = `${bound.left + bound.width / 2}px`;
             input.style.top = `${bound.top}px`;
         }
@@ -466,6 +466,9 @@
         }
 
         canvas.on('after:render', updateAllLabels);
+        canvas.on('object:moving', updateAllLabels);
+        canvas.on('object:scaling', updateAllLabels);
+        canvas.on('object:rotating', updateAllLabels);
         
         // Remove label if object is deleted
         canvas.on('object:removed', function(opt) {
