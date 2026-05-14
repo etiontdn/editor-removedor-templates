@@ -84,6 +84,8 @@
             display: flex;
             flex: 1;
             position: relative;
+            min-height: 0;
+            min-width: 0;
         }
 
         /* Canvas Container */
@@ -95,6 +97,8 @@
             overflow: hidden;
             background-color: #020617;
             position: relative;
+            min-height: 0;
+            min-width: 0;
         }
 
         /* Custom Scrollbar for tools */
@@ -447,7 +451,7 @@
 
         function updateLabelPosition(obj, input) {
             if(!input || !obj.canvas) return;
-            const bound = obj.getBoundingRect();
+            const bound = obj.getBoundingRect(true, true);
             input.style.left = `${bound.left + bound.width / 2}px`;
             input.style.top = `${bound.top}px`;
         }
@@ -619,6 +623,7 @@
                 vpt[4] += e.clientX - this.lastPosX;
                 vpt[5] += e.clientY - this.lastPosY;
                 this.requestRenderAll();
+                updateAllLabels();
                 this.lastPosX = e.clientX;
                 this.lastPosY = e.clientY;
             }
