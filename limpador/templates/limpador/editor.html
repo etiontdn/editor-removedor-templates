@@ -209,9 +209,10 @@
     <div class="workspace">
         <!-- Floating Toolbar -->
         <div class="toolbar" id="toolbar" style="display: none;">
-            <button class="tool-btn active" id="tool-select" title="Selecionar/Mover">🖱️</button>
-            <button class="tool-btn" id="tool-draw" title="Desenhar Retângulo">⬜</button>
-            <button class="tool-btn" id="tool-pencil" title="Desenhar Livre (Lápis)">✏️</button>
+            <button class="tool-btn active" id="tool-select" title="Selecionar/Mover (V)">🖱️</button>
+            <button class="tool-btn" id="tool-draw" title="Desenhar Retângulo (M)">⬜</button>
+            <button class="tool-btn" id="tool-pencil" title="Desenhar Livre (B)">✏️</button>
+            <button class="tool-btn" id="tool-eraser" title="Apagar Formas (E)">🧽</button>
             
             <div id="pencil-options" style="display: none; flex-direction: column; gap: 5px; margin-top: 10px;">
                 <label for="pencil-size" style="font-size: 10px; color: var(--text-muted); text-align: center;">Tamanho</label>
@@ -245,6 +246,8 @@
         let currentImageId = null;
         let isDrawingMode = false;
         let isPencilMode = false;
+        let isEraserMode = false;
+        let isSpaceDown = false;
         let templateCount = 0;
         let rect, isDown, origX, origY;
 
@@ -294,12 +297,52 @@
         });
 
         window.addEventListener('keydown', (e) => {
-            if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement.tagName !== 'INPUT') {
+            // Ignore if typing in input
+            if (document.activeElement.tagName === 'INPUT') return;
+
+            if (e.key === 'Delete' || e.key === 'Backspace') {
                 const activeObjects = canvas.getActiveObjects();
                 if (activeObjects.length) {
                     canvas.discardActiveObject();
                     activeObjects.forEach(obj => canvas.remove(obj));
                 }
+                return;
+            }
+
+            // Spacebar for panning
+            if (e.code === 'Space' && !isSpaceDown) {
+                isSpaceDown = true;
+                canvas.defaultCursor = 'grab';
+                canvas.isDrawingMode = false; // temporarily disable drawing
+                e.preventDefault();
+                return;
+            }
+
+            // Shortcuts
+            switch(e.key.toLowerCase()) {
+                case 'v': document.getElementById('tool-select').click(); break;
+                case 'm':
+                case 'u': document.getElementById('tool-draw').click(); break;
+                case 'b': document.getElementById('tool-pencil').click(); break;
+                case 'e': document.getElementById('tool-eraser').click(); break;
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (document.activeElement.tagName === 'INPUT') return;
+            if (e.code === 'Space') {
+                isSpaceDown = false;
+                // Restore cursor based on active tool
+                if (isEraserMode) {
+                    canvas.defaultCursor = 'alias';
+                } else if (isDrawingMode || isPencilMode) {
+                    canvas.defaultCursor = 'crosshair';
+                } else {
+                    canvas.defaultCursor = 'default';
+                }
+                // Restore pencil mode if it was active
+                if (isPencilMode) canvas.isDrawingMode = true;
+                e.preventDefault();
             }
         });
 
@@ -322,18 +365,25 @@
             opt.e.stopPropagation();
         });
 
-        // Pan Logic (Alt + Click ou Middle Mouse Button)
+        // Pan Logic (Spacebar + Click, Alt + Click ou Middle Mouse Button)
         canvas.on('mouse:down', function(opt) {
             var evt = opt.e;
-            // Middle click (1) or Alt key for panning
-            if (evt.button === 1 || evt.altKey) {
+            // Middle click (1), Alt key or Spacebar for panning
+            if (evt.button === 1 || evt.altKey || isSpaceDown) {
                 this.isDragging = true;
                 this.tempIsDrawingMode = this.isDrawingMode;
                 this.isDrawingMode = false;
                 this.selection = false;
                 this.lastPosX = evt.clientX;
                 this.lastPosY = evt.clientY;
+                canvas.defaultCursor = 'grabbing';
             } 
+            else if (isEraserMode) {
+                if (opt.target) {
+                    canvas.remove(opt.target);
+                    canvas.discardActiveObject();
+                }
+            }
             else if (isDrawingMode) {
                 // Drawing Rectangle Mode
                 isDown = true;
@@ -388,10 +438,20 @@
             if (this.isDragging) {
                 this.isDragging = false;
                 this.isDrawingMode = this.tempIsDrawingMode;
-                this.selection = (!isDrawingMode && !isPencilMode);
+                this.selection = (!isDrawingMode && !isPencilMode && !isEraserMode);
+                
+                if (isSpaceDown) {
+                    canvas.defaultCursor = 'grab';
+                } else if (isDrawingMode || isPencilMode) {
+                    canvas.defaultCursor = 'crosshair';
+                } else if (isEraserMode) {
+                    canvas.defaultCursor = 'alias';
+                } else {
+                    canvas.defaultCursor = 'default';
+                }
             }
             else {
-                this.selection = (!isDrawingMode && !isPencilMode);
+                this.selection = (!isDrawingMode && !isPencilMode && !isEraserMode);
                 if(isDrawingMode){
                     isDown = false;
                     if(rect){
@@ -428,22 +488,24 @@
         document.getElementById('tool-select').addEventListener('click', (e) => {
             isDrawingMode = false;
             isPencilMode = false;
+            isEraserMode = false;
             canvas.isDrawingMode = false;
             canvas.selection = true;
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             e.currentTarget.classList.add('active');
-            canvas.defaultCursor = 'default';
+            canvas.defaultCursor = isSpaceDown ? 'grab' : 'default';
             document.getElementById('pencil-options').style.display = 'none';
         });
 
         document.getElementById('tool-draw').addEventListener('click', (e) => {
             isDrawingMode = true;
             isPencilMode = false;
+            isEraserMode = false;
             canvas.isDrawingMode = false;
-            canvas.selection = false; // disable selection while drawing
+            canvas.selection = false; 
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             e.currentTarget.classList.add('active');
-            canvas.defaultCursor = 'crosshair';
+            canvas.defaultCursor = isSpaceDown ? 'grab' : 'crosshair';
             canvas.discardActiveObject();
             canvas.renderAll();
             document.getElementById('pencil-options').style.display = 'none';
@@ -452,16 +514,33 @@
         document.getElementById('tool-pencil').addEventListener('click', (e) => {
             isDrawingMode = false;
             isPencilMode = true;
-            canvas.isDrawingMode = true;
+            isEraserMode = false;
+            canvas.isDrawingMode = !isSpaceDown;
             canvas.freeDrawingBrush.color = 'rgba(255, 255, 255, 0.8)';
             canvas.freeDrawingBrush.width = parseInt(document.getElementById('pencil-size').value, 10);
             
             canvas.selection = false;
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             e.currentTarget.classList.add('active');
+            canvas.defaultCursor = isSpaceDown ? 'grab' : 'crosshair';
             canvas.discardActiveObject();
             canvas.renderAll();
             document.getElementById('pencil-options').style.display = 'flex';
+        });
+
+        document.getElementById('tool-eraser').addEventListener('click', (e) => {
+            isDrawingMode = false;
+            isPencilMode = false;
+            isEraserMode = true;
+            canvas.isDrawingMode = false;
+            canvas.selection = false;
+            
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            canvas.defaultCursor = isSpaceDown ? 'grab' : 'alias';
+            canvas.discardActiveObject();
+            canvas.renderAll();
+            document.getElementById('pencil-options').style.display = 'none';
         });
 
         document.getElementById('pencil-size').addEventListener('input', (e) => {
