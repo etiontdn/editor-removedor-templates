@@ -171,6 +171,29 @@
         .tool-btn:hover, .tool-btn.active {
             background: rgba(255,255,255,0.1);
         }
+
+        /* Floating Label */
+        .floating-label {
+            position: absolute;
+            background: rgba(15, 23, 42, 0.8);
+            color: #f8fafc;
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 12px;
+            pointer-events: auto;
+            z-index: 20;
+            transform: translate(-50%, -100%);
+            margin-top: -5px;
+            outline: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            text-align: center;
+            width: 100px;
+        }
+        .floating-label:focus {
+            background: rgba(15, 23, 42, 1);
+            border-color: #60a5fa;
+        }
     </style>
 </head>
 <body>
@@ -188,6 +211,12 @@
         <div class="toolbar" id="toolbar" style="display: none;">
             <button class="tool-btn active" id="tool-select" title="Selecionar/Mover">🖱️</button>
             <button class="tool-btn" id="tool-draw" title="Desenhar Retângulo">⬜</button>
+            <button class="tool-btn" id="tool-pencil" title="Desenhar Livre (Lápis)">✏️</button>
+            
+            <div id="pencil-options" style="display: none; flex-direction: column; gap: 5px; margin-top: 10px;">
+                <label for="pencil-size" style="font-size: 10px; color: var(--text-muted); text-align: center;">Tamanho</label>
+                <input type="range" id="pencil-size" min="5" max="100" value="20" style="width: 40px; margin: 0 auto;">
+            </div>
         </div>
 
         <div class="canvas-container-wrapper" id="canvas-wrapper">
@@ -215,7 +244,64 @@
 
         let currentImageId = null;
         let isDrawingMode = false;
+        let isPencilMode = false;
+        let templateCount = 0;
         let rect, isDown, origX, origY;
+
+        function createFloatingLabel(obj) {
+            templateCount++;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'floating-label';
+            input.value = `template_${templateCount}`;
+            input.id = `label_${obj.id}`;
+            document.getElementById('canvas-wrapper').appendChild(input);
+            
+            obj.templateName = input.value;
+            input.addEventListener('input', (e) => {
+                obj.templateName = e.target.value;
+            });
+            
+            updateLabelPosition(obj, input);
+            return input;
+        }
+
+        function updateLabelPosition(obj, input) {
+            if(!input || !obj.canvas) return;
+            const bound = obj.getBoundingRect();
+            input.style.left = `${bound.left + bound.width / 2}px`;
+            input.style.top = `${bound.top}px`;
+        }
+
+        function updateAllLabels() {
+            canvas.getObjects().forEach(obj => {
+                if(obj.id) {
+                    const input = document.getElementById(`label_${obj.id}`);
+                    if(input) updateLabelPosition(obj, input);
+                }
+            });
+        }
+
+        canvas.on('after:render', updateAllLabels);
+        
+        // Remove label if object is deleted
+        canvas.on('object:removed', function(opt) {
+            const obj = opt.target;
+            if (obj && obj.id) {
+                const input = document.getElementById(`label_${obj.id}`);
+                if (input) input.remove();
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement.tagName !== 'INPUT') {
+                const activeObjects = canvas.getActiveObjects();
+                if (activeObjects.length) {
+                    canvas.discardActiveObject();
+                    activeObjects.forEach(obj => canvas.remove(obj));
+                }
+            }
+        });
 
         // Resize canvas on window resize
         window.addEventListener('resize', () => {
@@ -242,6 +328,8 @@
             // Middle click (1) or Alt key for panning
             if (evt.button === 1 || evt.altKey) {
                 this.isDragging = true;
+                this.tempIsDrawingMode = this.isDrawingMode;
+                this.isDrawingMode = false;
                 this.selection = false;
                 this.lastPosX = evt.clientX;
                 this.lastPosY = evt.clientY;
@@ -297,40 +385,89 @@
         });
 
         canvas.on('mouse:up', function(opt) {
-            this.isDragging = false;
-            this.selection = true;
-            if(isDrawingMode){
-                isDown = false;
-                if(rect){
-                    // Se o retângulo for muito pequeno, remove (clique acidental)
-                    if(rect.width < 5 || rect.height < 5) {
-                        canvas.remove(rect);
-                    } else {
-                        // Reseta a cor para o patch branco final (ou mantém semi-transparente para edição)
-                        rect.set({ fill: 'rgba(255, 255, 255, 0.8)'});
-                        canvas.renderAll();
+            if (this.isDragging) {
+                this.isDragging = false;
+                this.isDrawingMode = this.tempIsDrawingMode;
+                this.selection = (!isDrawingMode && !isPencilMode);
+            }
+            else {
+                this.selection = (!isDrawingMode && !isPencilMode);
+                if(isDrawingMode){
+                    isDown = false;
+                    if(rect){
+                        // Se o retângulo for muito pequeno, remove (clique acidental)
+                        if(rect.width < 5 || rect.height < 5) {
+                            canvas.remove(rect);
+                        } else {
+                            // Reseta a cor para o patch branco final (ou mantém semi-transparente para edição)
+                            rect.set({ fill: 'rgba(255, 255, 255, 0.8)'});
+                            rect.id = 'rect_' + new Date().getTime();
+                            createFloatingLabel(rect);
+                            canvas.renderAll();
+                        }
+                        rect = null;
                     }
                 }
+            }
+        });
+
+        // Quando o lápis terminar de desenhar o caminho
+        canvas.on('path:created', function(opt) {
+            if (isPencilMode) {
+                const path = opt.path;
+                path.id = 'path_' + new Date().getTime();
+                path.set({
+                    fill: 'rgba(255, 255, 255, 0.8)',
+                    selectable: true
+                });
+                createFloatingLabel(path);
             }
         });
 
         // Toolbar Logic
         document.getElementById('tool-select').addEventListener('click', (e) => {
             isDrawingMode = false;
+            isPencilMode = false;
+            canvas.isDrawingMode = false;
             canvas.selection = true;
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-            e.target.classList.add('active');
+            e.currentTarget.classList.add('active');
             canvas.defaultCursor = 'default';
+            document.getElementById('pencil-options').style.display = 'none';
         });
 
         document.getElementById('tool-draw').addEventListener('click', (e) => {
             isDrawingMode = true;
+            isPencilMode = false;
+            canvas.isDrawingMode = false;
             canvas.selection = false; // disable selection while drawing
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-            e.target.classList.add('active');
+            e.currentTarget.classList.add('active');
             canvas.defaultCursor = 'crosshair';
             canvas.discardActiveObject();
             canvas.renderAll();
+            document.getElementById('pencil-options').style.display = 'none';
+        });
+
+        document.getElementById('tool-pencil').addEventListener('click', (e) => {
+            isDrawingMode = false;
+            isPencilMode = true;
+            canvas.isDrawingMode = true;
+            canvas.freeDrawingBrush.color = 'rgba(255, 255, 255, 0.8)';
+            canvas.freeDrawingBrush.width = parseInt(document.getElementById('pencil-size').value, 10);
+            
+            canvas.selection = false;
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            canvas.discardActiveObject();
+            canvas.renderAll();
+            document.getElementById('pencil-options').style.display = 'flex';
+        });
+
+        document.getElementById('pencil-size').addEventListener('input', (e) => {
+            if (canvas.freeDrawingBrush) {
+                canvas.freeDrawingBrush.width = parseInt(e.target.value, 10);
+            }
         });
 
 
