@@ -172,7 +172,8 @@ def process_task(task_id, mother_path, selected_folders):
                 process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
 
         PROCESSING_TASKS[task_id]['status'] = 'completed'
-        PROCESSING_TASKS[task_id]['message'] = 'Processamento finalizado com sucesso!'
+        count = PROCESSING_TASKS[task_id]['processed_count']
+        PROCESSING_TASKS[task_id]['message'] = f'Processamento finalizado com sucesso! {count} imagens processadas.'
         print("[DEBUG] Tarefa finalizada com sucesso.")
         
     except Exception as e:
