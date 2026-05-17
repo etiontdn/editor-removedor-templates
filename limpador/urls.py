@@ -11,4 +11,5 @@ urlpatterns = [
     path('scan-folders/', views.scan_folders_api, name='scan_folders'),
     path('start-processing/', views.start_processing_api, name='start_processing'),
     path('progress/<str:task_id>/', views.get_progress_api, name='get_progress'),
+    path('selecionar-pasta/', views.selecionar_pasta_local, name='selecionar_pasta'),
 ]

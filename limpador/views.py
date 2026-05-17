@@ -180,3 +180,18 @@ def get_progress_api(request, task_id):
         return JsonResponse({'success': False, 'error': 'Tarefa não encontrada.'}, status=404)
     return JsonResponse({'success': True, 'task': task})
 
+def selecionar_pasta_local(request):
+    import tkinter as tk
+    from tkinter import filedialog
+    
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    
+    caminho_pasta = filedialog.askdirectory()
+    
+    root.destroy()
+    
+    return JsonResponse({'sucesso': True, 'caminho': caminho_pasta})
+
+
