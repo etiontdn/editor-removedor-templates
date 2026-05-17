@@ -133,15 +133,18 @@ def process_task(task_id, mother_path, selected_folders):
             return
 
         total_arquivos = 0
+        total_transicoes = 0
         for folder in selected_folders:
             f_path = os.path.join(mother_path, folder)
             if os.path.isdir(f_path):
                 files = [f for f in os.listdir(f_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
                 total_arquivos += len(files)
+                total_transicoes += max(0, len(files) - 1)
                 print(f"[DEBUG] Pasta '{folder}': {len(files)} arquivos encontrados.")
         
-        print(f"[DEBUG] Total de arquivos para processar: {total_arquivos}")
-        PROCESSING_TASKS[task_id]['total'] = total_arquivos
+        total_operacoes = total_arquivos + total_transicoes
+        print(f"[DEBUG] Total de arquivos: {total_arquivos}, Total de transições: {total_transicoes}")
+        PROCESSING_TASKS[task_id]['total'] = total_operacoes
         if total_arquivos == 0:
             print("[DEBUG] Nada para processar.")
             PROCESSING_TASKS[task_id]['status'] = 'completed'
@@ -170,10 +173,15 @@ def process_task(task_id, mother_path, selected_folders):
             PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
             for i in range(len(arquivos) - 1):
                 process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
+                
+                PROCESSING_TASKS[task_id]['processed_count'] += 1
+                total = PROCESSING_TASKS[task_id]['total']
+                if total > 0:
+                    PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
         PROCESSING_TASKS[task_id]['status'] = 'completed'
         count = PROCESSING_TASKS[task_id]['processed_count']
-        PROCESSING_TASKS[task_id]['message'] = f'Processamento finalizado com sucesso! {count} imagens processadas.'
+        PROCESSING_TASKS[task_id]['message'] = f'Processamento finalizado com sucesso! {count} operações concluídas.'
         print("[DEBUG] Tarefa finalizada com sucesso.")
         
     except Exception as e:
