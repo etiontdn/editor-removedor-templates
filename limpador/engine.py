@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from django.conf import settings
 from .models import ImageTemplate
 
@@ -73,6 +75,7 @@ def start_processing_thread(mother_path, selected_folders):
         'status': 'in_progress',
         'progress': 0,
         'total': 0,
+        'processed_count': 0,
         'current_file': '',
         'message': 'Inicializando...',
         'error': None
@@ -81,6 +84,25 @@ def start_processing_thread(mother_path, selected_folders):
     thread.daemon = True
     thread.start()
     return task_id
+
+def process_single_file(file_path, templates_info, threshold, task_id, progress_lock, folder_name):
+    try:
+        PROCESSING_TASKS[task_id]['current_file'] = f"[{folder_name}] {os.path.basename(file_path)}"
+        img = imread_unicode(file_path)
+        if img is not None:
+            _, img_final, alterou = process_single_image(img, templates_info, threshold)
+            if alterou:
+                print(f"[DEBUG] Imagem alterada e salva: {os.path.basename(file_path)}")
+                imwrite_unicode(file_path, img_final)
+        
+        with progress_lock:
+            PROCESSING_TASKS[task_id]['processed_count'] += 1
+            total = PROCESSING_TASKS[task_id]['total']
+            if total > 0:
+                PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
+    except Exception as e:
+        print(f"[DEBUG] Erro ao processar arquivo {file_path}: {e}")
+
 
 def process_task(task_id, mother_path, selected_folders):
     try:
@@ -137,17 +159,12 @@ def process_task(task_id, mother_path, selected_folders):
 
             # Fase 1: Individual
             print(f"[DEBUG] Iniciando Fase 1 (Individual) para pasta: {folder_name}")
-            for file_path in arquivos:
-                PROCESSING_TASKS[task_id]['current_file'] = f"[{folder_name}] {os.path.basename(file_path)}"
-                img = imread_unicode(file_path)
-                if img is not None:
-                    _, img_final, alterou = process_single_image(img, templates_info, THRESHOLD)
-                    if alterou:
-                        print(f"[DEBUG] Imagem alterada e salva: {os.path.basename(file_path)}")
-                        imwrite_unicode(file_path, img_final)
-                
-                arquivos_processados_count += 1
-                PROCESSING_TASKS[task_id]['progress'] = int((arquivos_processados_count / total_arquivos) * 100)
+            
+            progress_lock = threading.Lock()
+            
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                worker = partial(process_single_file, templates_info=templates_info, threshold=THRESHOLD, task_id=task_id, progress_lock=progress_lock, folder_name=folder_name)
+                executor.map(worker, arquivos)
 
             # Fase 2: Transição
             PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
