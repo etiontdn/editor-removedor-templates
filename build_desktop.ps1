@@ -13,7 +13,7 @@ if (-Not (Test-Path "Env:VIRTUAL_ENV")) {
 # --add-data: Inclui as pastas do projeto Django
 
 pyinstaller --noconfirm --onedir `
-    --name "LimpadorPRO" `
+    --name "Editor e Removedor de Templates" `
     --add-data "core;core" `
     --add-data "limpador/templates;limpador/templates" `
     --add-data "limpador/static;limpador/static" `
@@ -21,4 +21,4 @@ pyinstaller --noconfirm --onedir `
     --hidden-import "limpador.apps" `
     main.py
 
-Write-Host "Processo concluído! Verifique a pasta 'dist/LimpadorPRO'."
+Write-Host "Processo concluído! Verifique a pasta 'dist/Editor e Removedor de Templates'."
