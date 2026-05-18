@@ -8,6 +8,10 @@ from functools import partial
 from django.conf import settings
 from .models import ImageTemplate
 
+# Ativa o suporte a OpenCL para aceleração por GPU
+cv2.ocl.setUseOpenCL(True)
+print(f"[DEBUG] OpenCL ativado no motor: {cv2.ocl.useOpenCL()}")
+
 # Dicionário global para controlar o status de cada thread em andamento
 PROCESSING_TASKS = {}
 
@@ -229,8 +233,11 @@ def process_single_image(img_original, templates_info, threshold):
                 break
 
             # Sempre usa TM_CCOEFF_NORMED para considerar cores e ser mais robusto que TM_CCORR com mask
-            res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            # Convertendo para UMat para acelerar via OpenCL (GPU)
+            img_umat = cv2.UMat(img_trabalho)
+            temp_umat = cv2.UMat(temp_bgr)
+            res_umat = cv2.matchTemplate(img_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
             if max_val < threshold: break
             
             match_count += 1
@@ -318,8 +325,11 @@ def process_transition(path_a, path_b, templates_info, threshold):
             continue
 
         # Sempre usa TM_CCOEFF_NORMED para considerar cores
-        res = cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        # Convertendo para UMat para acelerar via OpenCL (GPU)
+        ponte_umat = cv2.UMat(ponte_trabalho)
+        temp_umat = cv2.UMat(temp_bgr)
+        res_umat = cv2.matchTemplate(ponte_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
 
         if max_val >= threshold:
             y_topo = max_loc[1]
