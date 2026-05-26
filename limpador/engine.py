@@ -118,6 +118,8 @@ def imwrite_unicode(path, img, webp_lossless=False):
                 params = [int(cv2.IMWRITE_WEBP_QUALITY), 80]
         elif ext in ['.jpg', '.jpeg']:
             params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            if len(img.shape) == 3 and img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             
         is_success, im_buf_arr = cv2.imencode(ext, img, params)
         if is_success:
