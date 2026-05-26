@@ -16,6 +16,63 @@ print(f"[DEBUG] OpenCL ativado no motor: {cv2.ocl.useOpenCL()}")
 # Dicionário global para controlar o status de cada thread em andamento
 PROCESSING_TASKS = {}
 
+# Cache global para templates redimensionados e UMat na GPU (Chave: (template_name, target_width))
+TEMPLATE_CACHE = {}
+TEMPLATE_CACHE_LOCK = threading.Lock()
+
+def get_cached_template(t_info, target_width):
+    """
+    Retorna o template redimensionado e preparado para matching (com cache thread-safe).
+    """
+    cache_key = (t_info['name'], target_width)
+    
+    with TEMPLATE_CACHE_LOCK:
+        cached = TEMPLATE_CACHE.get(cache_key)
+        
+    if cached is None:
+        proporcao = target_width / t_info['original_width'] if t_info['original_width'] > 0 else 1.0
+        th, tw = int(t_info['img'].shape[0] * proporcao), int(t_info['img'].shape[1] * proporcao)
+        
+        if tw > 0 and th > 0:
+            interp = cv2.INTER_AREA if proporcao < 1.0 else cv2.INTER_CUBIC
+            temp_rescalado = cv2.resize(t_info['img'], (tw, th), interpolation=interp)
+            
+            # Ignora transparência e foca apenas nas cores (BGR)
+            if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4:
+                temp_bgr = temp_rescalado[:, :, :3].copy()
+                temp_alpha_mask = temp_rescalado[:, :, 3].copy()
+            else:
+                temp_bgr = temp_rescalado
+                temp_alpha_mask = None
+            
+            has_transparency = False
+            if temp_alpha_mask is not None:
+                if np.any(temp_alpha_mask < 255):
+                    has_transparency = True
+            
+            # Converte e mantém na GPU (UMat)
+            temp_umat = cv2.UMat(temp_bgr)
+            
+            cached = {
+                'temp_bgr': temp_bgr,
+                'temp_alpha_mask': temp_alpha_mask,
+                'temp_umat': temp_umat,
+                'has_transparency': has_transparency,
+                'tw': tw,
+                'th': th,
+                'proporcao': proporcao
+            }
+            
+            with TEMPLATE_CACHE_LOCK:
+                if cache_key not in TEMPLATE_CACHE:
+                    TEMPLATE_CACHE[cache_key] = cached
+                else:
+                    cached = TEMPLATE_CACHE[cache_key]
+        else:
+            return None
+            
+    return cached
+
 def imread_unicode(path):
     """ Lê uma imagem de um caminho que contém acentos ou caracteres especiais. """
     try:
@@ -111,6 +168,12 @@ def process_single_file(file_path, templates_info, threshold, task_id, progress_
 
 def process_task(task_id, mother_path, selected_folders, process_transitions=True):
     start_time = time.time()
+    
+    # Invalida o cache global no início da execução de cada lote
+    global TEMPLATE_CACHE
+    with TEMPLATE_CACHE_LOCK:
+        TEMPLATE_CACHE.clear()
+        
     try:
         templates_db = ImageTemplate.objects.all()
         templates_info = []
@@ -220,26 +283,18 @@ def process_single_image(img_original, templates_info, threshold):
     alterou = False
     
     for t_info in sorted(templates_info, key=lambda x: 1 if x['action_type'] == 'cut_y' else 0):
-        proporcao = width_real / t_info['original_width'] if t_info['original_width'] > 0 else 1.0
-        th, tw = int(t_info['img'].shape[0] * proporcao), int(t_info['img'].shape[1] * proporcao)
-        if tw <= 0 or th <= 0 or tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]: continue
+        cached = get_cached_template(t_info, width_real)
+        if cached is None: continue
         
-        interp = cv2.INTER_AREA if proporcao < 1.0 else cv2.INTER_CUBIC
-        temp_rescalado = cv2.resize(t_info['img'], (tw, th), interpolation=interp)
-        
-        # Ignora transparência e foca apenas nas cores (BGR)
-        if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4:
-            temp_bgr = temp_rescalado[:, :, :3].copy()
-        else:
-            temp_bgr = temp_rescalado
-        
-        # Recarrega o alpha original para uso na aplicação (não no matching)
-        temp_alpha_mask = temp_rescalado[:, :, 3] if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else None
-        
-        has_transparency = False
-        if temp_alpha_mask is not None:
-            if np.any(temp_alpha_mask < 255):
-                has_transparency = True
+        tw = cached['tw']
+        th = cached['th']
+        proporcao = cached['proporcao']
+        temp_bgr = cached['temp_bgr']
+        temp_alpha_mask = cached['temp_alpha_mask']
+        temp_umat = cached['temp_umat']
+        has_transparency = cached['has_transparency']
+
+        if tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]: continue
 
         if has_transparency:
             print(f"[DEBUG] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
@@ -258,7 +313,6 @@ def process_single_image(img_original, templates_info, threshold):
             else:
                 # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
                 img_umat = cv2.UMat(img_trabalho)
-                temp_umat = cv2.UMat(temp_bgr)
                 res_umat = cv2.matchTemplate(img_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
             if max_val < threshold: break
@@ -327,31 +381,20 @@ def process_transition(path_a, path_b, templates_info, threshold):
     alterou_a, alterou_b = False, False
 
     for t_info in templates_info:
-        proporcao = w_a / t_info['original_width'] if t_info['original_width'] > 0 else 1.0
-        th, tw = int(t_info['img'].shape[0] * proporcao), int(t_info['img'].shape[1] * proporcao)
-        interp = cv2.INTER_AREA if proporcao < 1.0 else cv2.INTER_CUBIC
-        temp_rescalado = cv2.resize(t_info['img'], (tw, th), interpolation=interp)
+        cached = get_cached_template(t_info, w_a)
+        if cached is None: continue
         
-        # Ignora transparência e foca apenas nas cores (BGR)
-        if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4:
-            temp_bgr = temp_rescalado[:, :, :3].copy()
-        else:
-            temp_bgr = temp_rescalado
-        
-        # Recarrega o alpha original para uso na aplicação (não no matching)
-        temp_alpha_mask = temp_rescalado[:, :, 3] if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else None
-        
-        temp_alpha = None # Desativado conforme solicitado
-        
+        tw = cached['tw']
+        th = cached['th']
+        proporcao = cached['proporcao']
+        temp_bgr = cached['temp_bgr']
+        temp_alpha_mask = cached['temp_alpha_mask']
+        temp_umat = cached['temp_umat']
+        has_transparency = cached['has_transparency']
+
         # Verifica se cabe na ponte
         if tw > ponte_trabalho.shape[1] or th > ponte_trabalho.shape[0]:
             continue
-
-        # Abordagem híbrida: usa máscara se o template tiver transparência
-        has_transparency = False
-        if temp_alpha_mask is not None:
-            if np.any(temp_alpha_mask < 255):
-                has_transparency = True
 
         if has_transparency:
             print(f"[DEBUG] [Transição] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
@@ -363,7 +406,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
         else:
             # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
             ponte_umat = cv2.UMat(ponte_trabalho)
-            temp_umat = cv2.UMat(temp_bgr)
             res_umat = cv2.matchTemplate(ponte_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
 
