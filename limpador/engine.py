@@ -2,11 +2,16 @@ import os
 import cv2
 import numpy as np
 import uuid
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from django.conf import settings
 from .models import ImageTemplate
+
+# Ativa o suporte a OpenCL para aceleração por GPU
+cv2.ocl.setUseOpenCL(True)
+print(f"[DEBUG] OpenCL ativado no motor: {cv2.ocl.useOpenCL()}")
 
 # Dicionário global para controlar o status de cada thread em andamento
 PROCESSING_TASKS = {}
@@ -105,6 +110,7 @@ def process_single_file(file_path, templates_info, threshold, task_id, progress_
 
 
 def process_task(task_id, mother_path, selected_folders):
+    start_time = time.time()
     try:
         templates_db = ImageTemplate.objects.all()
         templates_info = []
@@ -130,6 +136,8 @@ def process_task(task_id, mother_path, selected_folders):
             print("[DEBUG] Nenhum template válido. Abortando.")
             PROCESSING_TASKS[task_id]['status'] = 'error'
             PROCESSING_TASKS[task_id]['message'] = 'Nenhum template válido encontrado.'
+            duration = time.time() - start_time
+            print(f"[DEBUG] Tarefa abortada (sem templates). Tempo decorrido: {duration:.2f} segundos.")
             return
 
         total_arquivos = 0
@@ -149,6 +157,8 @@ def process_task(task_id, mother_path, selected_folders):
             print("[DEBUG] Nada para processar.")
             PROCESSING_TASKS[task_id]['status'] = 'completed'
             PROCESSING_TASKS[task_id]['progress'] = 100
+            duration = time.time() - start_time
+            print(f"[DEBUG] Tarefa finalizada (nada para processar). Tempo decorrido: {duration:.2f} segundos.")
             return
 
         THRESHOLD = 0.92  # Aumentado de 0.75 para evitar matches falsos
@@ -182,7 +192,8 @@ def process_task(task_id, mother_path, selected_folders):
         PROCESSING_TASKS[task_id]['status'] = 'completed'
         count = PROCESSING_TASKS[task_id]['processed_count']
         PROCESSING_TASKS[task_id]['message'] = f'Processamento finalizado com sucesso! {count} operações concluídas.'
-        print("[DEBUG] Tarefa finalizada com sucesso.")
+        duration = time.time() - start_time
+        print(f"[DEBUG] Tarefa finalizada com sucesso. Tempo decorrido: {duration:.2f} segundos.")
         
     except Exception as e:
         import traceback
@@ -191,6 +202,8 @@ def process_task(task_id, mother_path, selected_folders):
         PROCESSING_TASKS[task_id]['status'] = 'error'
         PROCESSING_TASKS[task_id]['error'] = str(e)
         PROCESSING_TASKS[task_id]['message'] = 'Erro fatal no motor.'
+        duration = time.time() - start_time
+        print(f"[DEBUG] Tarefa interrompida com erro após {duration:.2f} segundos.")
 
 def process_single_image(img_original, templates_info, threshold):
     if len(img_original.shape) == 3 and img_original.shape[2] == 4:
@@ -221,6 +234,14 @@ def process_single_image(img_original, templates_info, threshold):
         # Recarrega o alpha original para uso na aplicação (não no matching)
         temp_alpha_mask = temp_rescalado[:, :, 3] if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else None
         
+        has_transparency = False
+        if temp_alpha_mask is not None:
+            if np.any(temp_alpha_mask < 255):
+                has_transparency = True
+
+        if has_transparency:
+            print(f"[DEBUG] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
+
         match_count = 0
         while match_count < 100:  # Limite de segurança contra loop infinito
             # Verifica se o template ainda cabe na imagem (importante após cortes)
@@ -228,9 +249,16 @@ def process_single_image(img_original, templates_info, threshold):
                 print(f"[DEBUG] Template {t_info['name']} maior que a imagem restante. Pulando.")
                 break
 
-            # Sempre usa TM_CCOEFF_NORMED para considerar cores e ser mais robusto que TM_CCORR com mask
-            res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if has_transparency:
+                # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
+                res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            else:
+                # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
+                img_umat = cv2.UMat(img_trabalho)
+                temp_umat = cv2.UMat(temp_bgr)
+                res_umat = cv2.matchTemplate(img_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
             if max_val < threshold: break
             
             match_count += 1
@@ -317,9 +345,25 @@ def process_transition(path_a, path_b, templates_info, threshold):
         if tw > ponte_trabalho.shape[1] or th > ponte_trabalho.shape[0]:
             continue
 
-        # Sempre usa TM_CCOEFF_NORMED para considerar cores
-        res = cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        # Abordagem híbrida: usa máscara se o template tiver transparência
+        has_transparency = False
+        if temp_alpha_mask is not None:
+            if np.any(temp_alpha_mask < 255):
+                has_transparency = True
+
+        if has_transparency:
+            print(f"[DEBUG] [Transição] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
+
+        if has_transparency:
+            # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
+            res = cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        else:
+            # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
+            ponte_umat = cv2.UMat(ponte_trabalho)
+            temp_umat = cv2.UMat(temp_bgr)
+            res_umat = cv2.matchTemplate(ponte_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
 
         if max_val >= threshold:
             y_topo = max_loc[1]
