@@ -180,14 +180,14 @@ def process_task(task_id, mother_path, selected_folders):
                 executor.map(worker, arquivos)
 
             # Fase 2: Transição
-            PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
-            for i in range(len(arquivos) - 1):
-                process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
+            # PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
+            # for i in range(len(arquivos) - 1):
+            #     process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
                 
-                PROCESSING_TASKS[task_id]['processed_count'] += 1
-                total = PROCESSING_TASKS[task_id]['total']
-                if total > 0:
-                    PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
+            #     PROCESSING_TASKS[task_id]['processed_count'] += 1
+            #     total = PROCESSING_TASKS[task_id]['total']
+            #     if total > 0:
+            #         PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
         PROCESSING_TASKS[task_id]['status'] = 'completed'
         count = PROCESSING_TASKS[task_id]['processed_count']
@@ -234,18 +234,20 @@ def process_single_image(img_original, templates_info, threshold):
         # Recarrega o alpha original para uso na aplicação (não no matching)
         temp_alpha_mask = temp_rescalado[:, :, 3] if len(temp_rescalado.shape) == 3 and temp_rescalado.shape[2] == 4 else None
         
+        has_transparency = False
+        if temp_alpha_mask is not None:
+            if np.any(temp_alpha_mask < 255):
+                has_transparency = True
+
+        if has_transparency:
+            print(f"[DEBUG] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
+
         match_count = 0
         while match_count < 100:  # Limite de segurança contra loop infinito
             # Verifica se o template ainda cabe na imagem (importante após cortes)
             if tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]:
                 print(f"[DEBUG] Template {t_info['name']} maior que a imagem restante. Pulando.")
                 break
-
-            # Abordagem híbrida: usa máscara se o template tiver transparência
-            has_transparency = False
-            if temp_alpha_mask is not None:
-                if np.any(temp_alpha_mask < 255):
-                    has_transparency = True
 
             if has_transparency:
                 # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
@@ -348,6 +350,9 @@ def process_transition(path_a, path_b, templates_info, threshold):
         if temp_alpha_mask is not None:
             if np.any(temp_alpha_mask < 255):
                 has_transparency = True
+
+        if has_transparency:
+            print(f"[DEBUG] [Transição] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
 
         if has_transparency:
             # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
