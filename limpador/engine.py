@@ -453,21 +453,34 @@ def process_transition(path_a, path_b, templates_info, threshold):
         if tw > ponte_trabalho.shape[1] or th > ponte_trabalho.shape[0]:
             continue
 
+        # Otimização de ROI (Região de Interesse):
+        # Como é um match de transição, o template obrigatoriamente cruza a linha de divisão h_a.
+        # Portanto, o topo do template (y_topo) precisa estar no intervalo [h_a - th, h_a].
+        # Podemos limitar a área de busca na ponte verticalmente para [h_a - th, h_a + th].
+        y_crop_ini = max(0, h_a - th)
+        y_crop_fim = min(ponte_trabalho.shape[0], h_a + th)
+
+        # Garante que a área de busca recortada é suficiente para o template caber verticalmente
+        if (y_crop_fim - y_crop_ini) < th:
+            continue
+
+        ponte_crop = ponte_trabalho[y_crop_ini:y_crop_fim, :]
+
         if has_transparency:
             print(f"[DEBUG] [Transição] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
 
         if has_transparency:
             # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
-            res = cv2.matchTemplate(ponte_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
+            res = cv2.matchTemplate(ponte_crop, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
         else:
             # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
-            ponte_umat = cv2.UMat(ponte_trabalho)
-            res_umat = cv2.matchTemplate(ponte_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+            ponte_crop_umat = cv2.UMat(ponte_crop)
+            res_umat = cv2.matchTemplate(ponte_crop_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
 
         if max_val >= threshold:
-            y_topo = max_loc[1]
+            y_topo = y_crop_ini + max_loc[1]
             if y_topo < h_a and (y_topo + th) > h_a:
                 padding = int(t_info['padding'] * proporcao)
                 y_ini, y_fim = y_topo - padding, y_topo + th + padding
