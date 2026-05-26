@@ -180,14 +180,14 @@ def process_task(task_id, mother_path, selected_folders):
                 executor.map(worker, arquivos)
 
             # Fase 2: Transição
-            # PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
-            # for i in range(len(arquivos) - 1):
-            #     process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
+            PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
+            for i in range(len(arquivos) - 1):
+                process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
                 
-            #     PROCESSING_TASKS[task_id]['processed_count'] += 1
-            #     total = PROCESSING_TASKS[task_id]['total']
-            #     if total > 0:
-            #         PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
+                PROCESSING_TASKS[task_id]['processed_count'] += 1
+                total = PROCESSING_TASKS[task_id]['total']
+                if total > 0:
+                    PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
         PROCESSING_TASKS[task_id]['status'] = 'completed'
         count = PROCESSING_TASKS[task_id]['processed_count']
