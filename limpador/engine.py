@@ -248,6 +248,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
     
     # Invalida o cache global no início da execução de cada lote
     global TEMPLATE_CACHE
+    # Nota: fazemos clear() aqui pois os templates podem ter sido adicionados/removidos pelo utilizador
     with TEMPLATE_CACHE_LOCK:
         TEMPLATE_CACHE.clear()
         
@@ -304,8 +305,28 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             return
 
         THRESHOLD = 0.92  # Aumentado de 0.75 para evitar matches falsos
-        MAX_MATCHES_PER_IMAGE = 50
-        arquivos_processados_count = 0
+
+        # Pré-aquece o cache de templates para todas as larguras encontradas nas pastas selecionadas
+        # Evita o custo de redimensionamento (~6s) na primeira imagem de cada pasta
+        larguras_vistas = set()
+        for folder_name_pre in selected_folders:
+            folder_path_pre = os.path.join(mother_path, folder_name_pre)
+            for fname in sorted(os.listdir(folder_path_pre)):
+                if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    try:
+                        img_pre = imread_unicode(os.path.join(folder_path_pre, fname))
+                        if img_pre is not None:
+                            larguras_vistas.add(img_pre.shape[1])
+                    except Exception:
+                        pass
+                    break  # Basta o primeiro arquivo para saber a largura da pasta
+        
+        if larguras_vistas:
+            print(f"[DEBUG] Pré-aquecendo cache de templates para larguras: {larguras_vistas}")
+            for t_info in templates_info:
+                for w_pre in larguras_vistas:
+                    get_cached_template(t_info, w_pre)
+            print(f"[DEBUG] Cache pré-aquecido para {len(templates_info)} templates × {len(larguras_vistas)} larguras.")
 
         for folder_name in selected_folders:
             folder_path = os.path.join(mother_path, folder_name)
