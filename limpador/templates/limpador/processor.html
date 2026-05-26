@@ -135,6 +135,15 @@
             display: block;
             margin-top: 0.5rem;
         }
+
+        .options-container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 2rem;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -156,6 +165,14 @@
 
         <div class="folder-list" id="folder-list">
             <!-- Pastas aparecerão aqui -->
+        </div>
+
+        <div class="options-container" id="options-section">
+            <div style="font-weight: 600; margin-bottom: 10px; font-size: 0.95rem; color: var(--text-main);">Opções de Processamento:</div>
+            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; user-select: none; font-size: 0.9rem; color: var(--text-muted);">
+                <input type="checkbox" id="chk-transitions" checked style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent);">
+                <span>Analisar e limpar transições entre imagens (quebras de página)</span>
+            </label>
         </div>
 
         <div style="text-align: right; display: none;" id="action-section">
@@ -222,6 +239,7 @@
                         `;
                     });
                     folderList.style.display = 'block';
+                    document.getElementById('options-section').style.display = 'block';
                     actionSection.style.display = 'block';
                 } else {
                     alert('Nenhuma pasta com imagens encontrada no diretório informado.');
@@ -239,12 +257,13 @@
             if (selectedFolders.length === 0) return alert('Selecione ao menos uma pasta.');
 
             const path = motherPathInput.value.trim();
+            const processTransitions = document.getElementById('chk-transitions').checked;
 
             try {
                 const response = await fetch('/start-processing/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path, folders: selectedFolders })
+                    body: JSON.stringify({ path, folders: selectedFolders, process_transitions: processTransitions })
                 });
                 const data = await response.json();
 
@@ -252,6 +271,7 @@
                     // Mudar UI para progresso
                     inputSection.style.display = 'none';
                     folderList.style.display = 'none';
+                    document.getElementById('options-section').style.display = 'none';
                     actionSection.style.display = 'none';
                     progressContainer.style.display = 'block';
                     

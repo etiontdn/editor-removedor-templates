@@ -161,13 +161,14 @@ def start_processing_api(request):
             data = json.loads(request.body)
             mother_path = data.get('path', '').strip()
             selected_folders = data.get('folders', [])
-            print(f"[DEBUG] API: start_processing_api chamado. Path: {mother_path}, Folders: {selected_folders}")
+            process_transitions = data.get('process_transitions', True)
+            print(f"[DEBUG] API: start_processing_api chamado. Path: {mother_path}, Folders: {selected_folders}, Process transitions: {process_transitions}")
             
             if not mother_path or not selected_folders:
                 print("[DEBUG] API: Erro - Caminho ou pastas não fornecidas.")
                 return JsonResponse({'success': False, 'error': 'Caminho ou pastas não selecionadas.'})
                 
-            task_id = start_processing_thread(mother_path, selected_folders)
+            task_id = start_processing_thread(mother_path, selected_folders, process_transitions=process_transitions)
             print(f"[DEBUG] API: Thread iniciada. Task ID: {task_id}")
             return JsonResponse({'success': True, 'task_id': task_id})
         except Exception as e:
