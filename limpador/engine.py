@@ -54,6 +54,24 @@ def get_cached_template(t_info, target_width):
             # Converte e mantém na GPU (UMat)
             temp_umat = cv2.UMat(temp_bgr)
             
+            # Pré-calcula versões reduzidas para 2x e 4x para downsampling ultra-rápido
+            downsample_cache = {}
+            for df in [2, 4]:
+                tw_small = int(tw / df)
+                th_small = int(th / df)
+                if tw_small > 0 and th_small > 0:
+                    temp_bgr_small = cv2.resize(temp_bgr, (tw_small, th_small), interpolation=cv2.INTER_AREA)
+                    temp_alpha_mask_small = cv2.resize(temp_alpha_mask, (tw_small, th_small), interpolation=cv2.INTER_AREA) if temp_alpha_mask is not None else None
+                else:
+                    temp_bgr_small = None
+                    temp_alpha_mask_small = None
+                downsample_cache[df] = {
+                    'tw_small': tw_small,
+                    'th_small': th_small,
+                    'temp_bgr_small': temp_bgr_small,
+                    'temp_alpha_mask_small': temp_alpha_mask_small
+                }
+            
             cached = {
                 'temp_bgr': temp_bgr,
                 'temp_alpha_mask': temp_alpha_mask,
@@ -61,7 +79,8 @@ def get_cached_template(t_info, target_width):
                 'has_transparency': has_transparency,
                 'tw': tw,
                 'th': th,
-                'proporcao': proporcao
+                'proporcao': proporcao,
+                'downsample_cache': downsample_cache
             }
             
             with TEMPLATE_CACHE_LOCK:
@@ -339,6 +358,14 @@ def process_single_image(img_original, templates_info, threshold, downsample_fac
     width_real = img_trabalho.shape[1]
     alterou = False
     
+    # Inicializa imagem reduzida uma única vez se o downsample estiver ativo
+    img_small = None
+    if downsample_factor > 1:
+        h_small = int(img_trabalho.shape[0] / downsample_factor)
+        w_small = int(img_trabalho.shape[1] / downsample_factor)
+        if h_small > 0 and w_small > 0:
+            img_small = cv2.resize(img_trabalho, (w_small, h_small), interpolation=cv2.INTER_AREA)
+    
     for t_info in sorted(templates_info, key=lambda x: 1 if x['action_type'] == 'cut_y' else 0):
         cached = get_cached_template(t_info, width_real)
         if cached is None: continue
@@ -353,24 +380,19 @@ def process_single_image(img_original, templates_info, threshold, downsample_fac
 
         if tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]: continue
 
-        # Se downsample_factor > 1, preparamos a busca em pirâmide
+        # Se downsample_factor > 1, recuperamos o template reduzido do cache
         downsample_factor_active = downsample_factor
         if downsample_factor > 1:
-            h_small = int(img_trabalho.shape[0] / downsample_factor)
-            w_small = int(img_trabalho.shape[1] / downsample_factor)
+            ds_info = cached.get('downsample_cache', {}).get(downsample_factor, {})
+            tw_small = ds_info.get('tw_small', 0)
+            th_small = ds_info.get('th_small', 0)
+            temp_bgr_small = ds_info.get('temp_bgr_small')
+            temp_alpha_mask_small = ds_info.get('temp_alpha_mask_small')
             
-            # Prepara template reduzido
-            tw_small, th_small = int(tw / downsample_factor), int(th / downsample_factor)
-            
-            if tw_small > 0 and th_small > 0:
-                img_small = cv2.resize(img_trabalho, (w_small, h_small), interpolation=cv2.INTER_AREA)
-                temp_bgr_small = cv2.resize(temp_bgr, (tw_small, th_small), interpolation=cv2.INTER_AREA)
-                if temp_alpha_mask is not None:
-                    temp_alpha_mask_small = cv2.resize(temp_alpha_mask, (tw_small, th_small), interpolation=cv2.INTER_AREA)
-                else:
-                    temp_alpha_mask_small = None
+            if tw_small > 0 and th_small > 0 and img_small is not None:
+                # Tudo pronto para busca piramidal
+                pass
             else:
-                # Se o template reduzido for menor que 1px, desativa o downsample para este template
                 downsample_factor_active = 1
 
         match_count = 0
@@ -487,6 +509,14 @@ def process_single_image(img_original, templates_info, threshold, downsample_fac
                     cv2.rectangle(img_trabalho, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
                     if img_original is not img_trabalho: cv2.rectangle(img_original, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
                 
+                # Sincroniza a imagem reduzida pintando o local do match, evitando ter que re-gerar via resize
+                if downsample_factor > 1 and downsample_factor_active > 1 and img_small is not None:
+                    x_ini_small = max(0, int(x_ini / downsample_factor))
+                    y_ini_small = max(0, int(y_ini / downsample_factor))
+                    x_fim_small = min(img_small.shape[1], int(x_fim / downsample_factor))
+                    y_fim_small = min(img_small.shape[0], int(y_fim / downsample_factor))
+                    cv2.rectangle(img_small, (x_ini_small, y_ini_small), (x_fim_small, y_fim_small), t_info['fill_color'], -1)
+                
                 alterou = True
             elif t_info['action_type'] == 'cut_y':
                 print(f"[DEBUG] Match found! Template: {t_info['name']} (Score: {max_val:.4f}). Action: CUT_Y em y={y_ini}")
@@ -499,10 +529,13 @@ def process_single_image(img_original, templates_info, threshold, downsample_fac
                 if downsample_factor > 1 and downsample_factor_active > 1:
                     h_small = int(img_trabalho.shape[0] / downsample_factor)
                     w_small = int(img_trabalho.shape[1] / downsample_factor)
-                    img_small = cv2.resize(img_trabalho, (w_small, h_small), interpolation=cv2.INTER_AREA)
+                    if h_small > 0 and w_small > 0:
+                        img_small = cv2.resize(img_trabalho, (w_small, h_small), interpolation=cv2.INTER_AREA)
+                    else:
+                        img_small = None
                     
             # Mascaramos a área correspondente na imagem reduzida para evitar achar o mesmo ponto
-            if downsample_factor > 1 and downsample_factor_active > 1:
+            if downsample_factor > 1 and downsample_factor_active > 1 and img_small is not None:
                 x_ini_small = max(0, int(x_ini / downsample_factor))
                 y_ini_small = max(0, int(y_ini / downsample_factor))
                 x_fim_small = min(img_small.shape[1], int(x_fim / downsample_factor))
