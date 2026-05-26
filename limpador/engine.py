@@ -193,7 +193,7 @@ def processor_worker(input_queue, output_queue, templates_info, threshold, task_
             print(f"[DEBUG] Erro ao processar arquivo {f_path} no worker: {e}")
             output_queue.put((f_path, None, False))
 
-def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name):
+def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name, templates_info=None, bands_cache=None):
     """ Thread consumidora: Retira da fila de saída, grava no disco e atualiza progresso. """
     for _ in range(total_files):
         f_path, img_final, alterou = output_queue.get()
@@ -203,6 +203,28 @@ def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name
                 imwrite_unicode(f_path, img_final)
         except Exception as e:
             print(f"[DEBUG] Erro ao salvar arquivo {f_path}: {e}")
+            
+        # Popula o cache na RAM das bandas do topo e fundo (bottom) para otimizar a fase de transições
+        if bands_cache is not None and img_final is not None:
+            try:
+                h, w = img_final.shape[:2]
+                max_th = 0
+                if templates_info:
+                    for t_info in templates_info:
+                        cached = get_cached_template(t_info, w)
+                        if cached:
+                            th_p = cached['th'] + int(t_info['padding'] * cached['proporcao'])
+                            if th_p > max_th:
+                                max_th = th_p
+                band_height = min(h, (max_th if max_th > 0 else 250) + 32)
+                if band_height > 0:
+                    bands_cache[f_path] = {
+                        'top': img_final[:band_height, :].copy(),
+                        'bottom': img_final[-band_height:, :].copy(),
+                        'h': h
+                    }
+            except Exception as e:
+                print(f"[DEBUG] Erro ao construir bands_cache para {f_path}: {e}")
             
         with progress_lock:
             PROCESSING_TASKS[task_id]['processed_count'] += 1
@@ -312,7 +334,8 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
                 workers.append(t_worker)
                 
             # 3. Executar o Gravador de forma síncrona na thread principal
-            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name)
+            bands_cache = {}
+            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name, templates_info, bands_cache)
             
             # Garantir encerramento das threads por segurança
             t_reader.join()
@@ -323,7 +346,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             if process_transitions:
                 PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
                 for i in range(len(arquivos) - 1):
-                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
+                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD, bands_cache)
                     
                     PROCESSING_TASKS[task_id]['processed_count'] += 1
                     total = PROCESSING_TASKS[task_id]['total']
@@ -544,19 +567,43 @@ def process_single_image(img_original, templates_info, threshold, downsample_fac
                 
     return img_trabalho, img_original, alterou
 
-def process_transition(path_a, path_b, templates_info, threshold):
-    img_a, img_b = imread_unicode(path_a), imread_unicode(path_b)
-    if img_a is None or img_b is None or img_a.shape[1] != img_b.shape[1]: return
+def process_transition(path_a, path_b, templates_info, threshold, bands_cache=None):
+    # Tenta usar as bandas em cache na RAM para evitar ler arquivos PNG pesados do disco
+    cached_a = bands_cache.get(path_a) if bands_cache else None
+    cached_b = bands_cache.get(path_b) if bands_cache else None
+    
+    using_cache = False
+    img_a, img_b = None, None
+    
+    if cached_a and cached_b:
+        img_a_band = cached_a['bottom']
+        img_b_band = cached_b['top']
+        h_a = img_a_band.shape[0]  # Altura da banda de A
+        w_a = img_a_band.shape[1]
+        
+        # Garante o mesmo número de canais para o vstack
+        if img_a_band.shape[2] != img_b_band.shape[2]:
+            if img_a_band.shape[2] == 4 and img_b_band.shape[2] == 3:
+                img_b_band = cv2.cvtColor(img_b_band, cv2.COLOR_BGR2BGRA)
+            elif img_a_band.shape[2] == 3 and img_b_band.shape[2] == 4:
+                img_a_band = cv2.cvtColor(img_a_band, cv2.COLOR_BGR2BGRA)
+        
+        ponte = np.vstack([img_a_band, img_b_band])
+        using_cache = True
+    else:
+        # Fallback: lê as imagens originais completas do disco
+        img_a, img_b = imread_unicode(path_a), imread_unicode(path_b)
+        if img_a is None or img_b is None or img_a.shape[1] != img_b.shape[1]: return
+        
+        if img_a.shape[2] != img_b.shape[2]:
+            if img_a.shape[2] == 4 and img_b.shape[2] == 3:
+                img_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2BGRA)
+            elif img_a.shape[2] == 3 and img_b.shape[2] == 4:
+                img_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2BGRA)
+                
+        h_a, w_a = img_a.shape[:2]
+        ponte = np.vstack([img_a, img_b])
 
-    # Garantir que ambas tenham o mesmo número de canais para o vstack
-    if img_a.shape[2] != img_b.shape[2]:
-        if img_a.shape[2] == 4 and img_b.shape[2] == 3:
-            img_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2BGRA)
-        elif img_a.shape[2] == 3 and img_b.shape[2] == 4:
-            img_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2BGRA)
-
-    h_a, w_a = img_a.shape[:2]
-    ponte = np.vstack([img_a, img_b])
     ponte_trabalho = ponte[:, :, :3].copy() if len(ponte.shape) == 3 and ponte.shape[2] == 4 else ponte.copy()
     alterou_a, alterou_b = False, False
 
@@ -577,9 +624,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
             continue
 
         # Otimização de ROI (Região de Interesse):
-        # Como é um match de transição, o template obrigatoriamente cruza a linha de divisão h_a.
-        # Portanto, o topo do template (y_topo) precisa estar no intervalo [h_a - th, h_a].
-        # Podemos limitar a área de busca na ponte verticalmente para [h_a - th, h_a + th].
         y_crop_ini = max(0, h_a - th)
         y_crop_fim = min(ponte_trabalho.shape[0], h_a + th)
 
@@ -588,9 +632,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
             continue
 
         ponte_crop = ponte_trabalho[y_crop_ini:y_crop_fim, :]
-
-        if has_transparency:
-            print(f"[DEBUG] [Transição] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
 
         if has_transparency:
             # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
@@ -603,7 +644,28 @@ def process_transition(path_a, path_b, templates_info, threshold):
             _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
 
         if max_val >= threshold:
-            y_topo = y_crop_ini + max_loc[1]
+            y_topo_ponte = y_crop_ini + max_loc[1]
+            
+            # Se havia dado match usando as bandas de cache, precisamos agora carregar as imagens
+            # originais completas do disco para aplicar a alteração fisicamente e salvar.
+            if using_cache:
+                img_a, img_b = imread_unicode(path_a), imread_unicode(path_b)
+                if img_a is None or img_b is None or img_a.shape[1] != img_b.shape[1]: return
+                if img_a.shape[2] != img_b.shape[2]:
+                    if img_a.shape[2] == 4 and img_b.shape[2] == 3:
+                        img_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2BGRA)
+                    elif img_a.shape[2] == 3 and img_b.shape[2] == 4:
+                        img_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2BGRA)
+                
+                h_a_full = img_a.shape[0]
+                # Ajusta y_topo para a imagem completa
+                # A banda de A tinha altura h_a. O offset é (h_a_full - h_a)
+                y_topo = y_topo_ponte + (h_a_full - h_a)
+                h_a = h_a_full
+                using_cache = False  # Não está mais usando cache, carregou as originais
+            else:
+                y_topo = y_topo_ponte
+            
             if y_topo < h_a and (y_topo + th) > h_a:
                 padding = int(t_info['padding'] * proporcao)
                 y_ini, y_fim = y_topo - padding, y_topo + th + padding
@@ -612,13 +674,11 @@ def process_transition(path_a, path_b, templates_info, threshold):
                     
                     if temp_alpha_mask is not None:
                         # Aplicação mascarada na transição
-                        # Cria uma máscara para a área da transição na ponte
                         y_fim = y_topo + th
                         padding = int(t_info['padding'] * proporcao)
-                        y_ini_p, y_fim_p = max(0, y_topo - padding), min(ponte.shape[0], y_topo + th + padding)
+                        y_ini_p, y_fim_p = max(0, y_topo - padding), min(h_a + img_b.shape[0], y_topo + th + padding)
                         
                         mask_resized = cv2.resize(temp_alpha_mask, (w_a, y_fim_p - y_ini_p), interpolation=cv2.INTER_AREA)
-                        color_fill = np.full((y_fim_p - y_ini_p, w_a, 3), t_info['fill_color'], dtype=np.uint8)
                         mask_bool = mask_resized > 10
                         
                         # Divide a aplicação entre imagem A e B
@@ -663,5 +723,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
                         alterou_b = True
                 break
 
-    if alterou_a: imwrite_unicode(path_a, img_a)
-    if alterou_b: imwrite_unicode(path_b, img_b)
+    if not using_cache:
+        if alterou_a and img_a is not None: imwrite_unicode(path_a, img_a)
+        if alterou_b and img_b is not None: imwrite_unicode(path_b, img_b)
