@@ -74,7 +74,7 @@ def hex_to_bgr(hex_color):
         return (b, g, r)
     return (255, 255, 255)
 
-def start_processing_thread(mother_path, selected_folders):
+def start_processing_thread(mother_path, selected_folders, process_transitions=True):
     task_id = str(uuid.uuid4())
     PROCESSING_TASKS[task_id] = {
         'status': 'in_progress',
@@ -85,7 +85,7 @@ def start_processing_thread(mother_path, selected_folders):
         'message': 'Inicializando...',
         'error': None
     }
-    thread = threading.Thread(target=process_task, args=(task_id, mother_path, selected_folders))
+    thread = threading.Thread(target=process_task, args=(task_id, mother_path, selected_folders, process_transitions))
     thread.daemon = True
     thread.start()
     return task_id
@@ -109,7 +109,7 @@ def process_single_file(file_path, templates_info, threshold, task_id, progress_
         print(f"[DEBUG] Erro ao processar arquivo {file_path}: {e}")
 
 
-def process_task(task_id, mother_path, selected_folders):
+def process_task(task_id, mother_path, selected_folders, process_transitions=True):
     start_time = time.time()
     try:
         templates_db = ImageTemplate.objects.all()
@@ -147,7 +147,8 @@ def process_task(task_id, mother_path, selected_folders):
             if os.path.isdir(f_path):
                 files = [f for f in os.listdir(f_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
                 total_arquivos += len(files)
-                total_transicoes += max(0, len(files) - 1)
+                if process_transitions:
+                    total_transicoes += max(0, len(files) - 1)
                 print(f"[DEBUG] Pasta '{folder}': {len(files)} arquivos encontrados.")
         
         total_operacoes = total_arquivos + total_transicoes
@@ -180,14 +181,15 @@ def process_task(task_id, mother_path, selected_folders):
                 executor.map(worker, arquivos)
 
             # Fase 2: Transição
-            PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
-            for i in range(len(arquivos) - 1):
-                process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
-                
-                PROCESSING_TASKS[task_id]['processed_count'] += 1
-                total = PROCESSING_TASKS[task_id]['total']
-                if total > 0:
-                    PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
+            if process_transitions:
+                PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
+                for i in range(len(arquivos) - 1):
+                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
+                    
+                    PROCESSING_TASKS[task_id]['processed_count'] += 1
+                    total = PROCESSING_TASKS[task_id]['total']
+                    if total > 0:
+                        PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
         PROCESSING_TASKS[task_id]['status'] = 'completed'
         count = PROCESSING_TASKS[task_id]['processed_count']
