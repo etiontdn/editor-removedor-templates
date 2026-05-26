@@ -169,10 +169,22 @@
 
         <div class="options-container" id="options-section">
             <div style="font-weight: 600; margin-bottom: 10px; font-size: 0.95rem; color: var(--text-main);">Opções de Processamento:</div>
-            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; user-select: none; font-size: 0.9rem; color: var(--text-muted);">
+            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; user-select: none; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
                 <input type="checkbox" id="chk-transitions" checked style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent);">
                 <span>Analisar e limpar transições entre imagens (quebras de página)</span>
             </label>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 1rem;">
+                <label for="sel-downsample" style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Fator de Redução de Resolução (Downsampling):</label>
+                <select id="sel-downsample" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.2); color: white; padding: 0.8rem 1rem; border-radius: 8px; outline: none; width: 100%; cursor: pointer; font-family: inherit; font-size: 0.9rem; transition: border-color 0.2s;">
+                    <option value="1">Desativado (Usar resolução original)</option>
+                    <option value="2">2x (Processamento mais rápido)</option>
+                    <option value="4" selected>4x (Processamento ultra rápido - recomendado para páginas longas)</option>
+                </select>
+                <small style="font-size: 0.8rem; color: var(--text-muted); display: block; line-height: 1.4;">
+                    Reduz a imagem de trabalho temporariamente para acelerar a busca grosseira de templates, refinando-a em resolução original em seguida. 
+                    Se um template for muito pequeno (ex: ícone &lt; 80px), o downsampling é automaticamente adaptado para evitar falhas de escala.
+                </small>
+            </div>
         </div>
 
         <div style="text-align: right; display: none;" id="action-section">
@@ -258,12 +270,18 @@
 
             const path = motherPathInput.value.trim();
             const processTransitions = document.getElementById('chk-transitions').checked;
+            const downsampleFactor = parseInt(document.getElementById('sel-downsample').value) || 1;
 
             try {
                 const response = await fetch('/start-processing/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path, folders: selectedFolders, process_transitions: processTransitions })
+                    body: JSON.stringify({ 
+                        path, 
+                        folders: selectedFolders, 
+                        process_transitions: processTransitions,
+                        downsample_factor: downsampleFactor
+                    })
                 });
                 const data = await response.json();
 

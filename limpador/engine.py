@@ -54,6 +54,24 @@ def get_cached_template(t_info, target_width):
             # Converte e mantém na GPU (UMat)
             temp_umat = cv2.UMat(temp_bgr)
             
+            # Pré-calcula versões reduzidas para 2x e 4x para downsampling ultra-rápido
+            downsample_cache = {}
+            for df in [2, 4]:
+                tw_small = int(tw / df)
+                th_small = int(th / df)
+                if tw_small > 0 and th_small > 0:
+                    temp_bgr_small = cv2.resize(temp_bgr, (tw_small, th_small), interpolation=cv2.INTER_AREA)
+                    temp_alpha_mask_small = cv2.resize(temp_alpha_mask, (tw_small, th_small), interpolation=cv2.INTER_AREA) if temp_alpha_mask is not None else None
+                else:
+                    temp_bgr_small = None
+                    temp_alpha_mask_small = None
+                downsample_cache[df] = {
+                    'tw_small': tw_small,
+                    'th_small': th_small,
+                    'temp_bgr_small': temp_bgr_small,
+                    'temp_alpha_mask_small': temp_alpha_mask_small
+                }
+            
             cached = {
                 'temp_bgr': temp_bgr,
                 'temp_alpha_mask': temp_alpha_mask,
@@ -61,7 +79,8 @@ def get_cached_template(t_info, target_width):
                 'has_transparency': has_transparency,
                 'tw': tw,
                 'th': th,
-                'proporcao': proporcao
+                'proporcao': proporcao,
+                'downsample_cache': downsample_cache
             }
             
             with TEMPLATE_CACHE_LOCK:
@@ -88,12 +107,19 @@ def imread_unicode(path):
         return None
 
 def imwrite_unicode(path, img):
-    """ Salva uma imagem em um caminho que contém acentos ou caracteres especiais. """
+    """ Salva uma imagem em um caminho que contém acentos ou caracteres especiais com qualidade otimizada. """
     try:
-        ext = os.path.splitext(path)[1]
-        is_success, im_buf_arr = cv2.imencode(ext, img)
+        ext = os.path.splitext(path)[1].lower()
+        params = []
+        if ext == '.webp':
+            params = [int(cv2.IMWRITE_WEBP_QUALITY), 80]
+        elif ext in ['.jpg', '.jpeg']:
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            
+        is_success, im_buf_arr = cv2.imencode(ext, img, params)
         if is_success:
-            im_buf_arr.tofile(path)
+            with open(path, 'wb') as f:
+                f.write(im_buf_arr.tobytes())
             return True
         print(f"[DEBUG] Erro: Falha ao codificar imagem {path}")
         return False
@@ -132,7 +158,7 @@ def hex_to_bgr(hex_color):
         return (b, g, r)
     return (255, 255, 255)
 
-def start_processing_thread(mother_path, selected_folders, process_transitions=True):
+def start_processing_thread(mother_path, selected_folders, process_transitions=True, downsample_factor=1):
     task_id = str(uuid.uuid4())
     PROCESSING_TASKS[task_id] = {
         'status': 'in_progress',
@@ -143,7 +169,7 @@ def start_processing_thread(mother_path, selected_folders, process_transitions=T
         'message': 'Inicializando...',
         'error': None
     }
-    thread = threading.Thread(target=process_task, args=(task_id, mother_path, selected_folders, process_transitions))
+    thread = threading.Thread(target=process_task, args=(task_id, mother_path, selected_folders, process_transitions, downsample_factor))
     thread.daemon = True
     thread.start()
     return task_id
@@ -155,8 +181,8 @@ def reader_worker(arquivos, input_queue):
         input_queue.put((f_path, img))
     input_queue.put(None)  # Sinaliza fim dos arquivos
 
-def processor_worker(input_queue, output_queue, templates_info, threshold, task_id, folder_name):
-    """ Threads trabalhadoras: Consomem da fila de entrada, processam e colocam na fila de saída. """
+def processor_worker(input_queue, output_queue, templates_info, threshold, task_id, folder_name, downsample_factor=1):
+    """ Threads trabalhadoras: Consomem da fila de entrada, processam e calculam a saída. """
     while True:
         item = input_queue.get()
         if item is None:
@@ -166,7 +192,7 @@ def processor_worker(input_queue, output_queue, templates_info, threshold, task_
         try:
             PROCESSING_TASKS[task_id]['current_file'] = f"[{folder_name}] {os.path.basename(f_path)}"
             if img is not None:
-                _, img_final, alterou = process_single_image(img, templates_info, threshold)
+                _, img_final, alterou = process_single_image(img, templates_info, threshold, downsample_factor=downsample_factor)
                 output_queue.put((f_path, img_final, alterou))
             else:
                 output_queue.put((f_path, None, False))
@@ -174,7 +200,7 @@ def processor_worker(input_queue, output_queue, templates_info, threshold, task_
             print(f"[DEBUG] Erro ao processar arquivo {f_path} no worker: {e}")
             output_queue.put((f_path, None, False))
 
-def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name):
+def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name, templates_info=None, bands_cache=None):
     """ Thread consumidora: Retira da fila de saída, grava no disco e atualiza progresso. """
     for _ in range(total_files):
         f_path, img_final, alterou = output_queue.get()
@@ -185,6 +211,28 @@ def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name
         except Exception as e:
             print(f"[DEBUG] Erro ao salvar arquivo {f_path}: {e}")
             
+        # Popula o cache na RAM das bandas do topo e fundo (bottom) para otimizar a fase de transições
+        if bands_cache is not None and img_final is not None:
+            try:
+                h, w = img_final.shape[:2]
+                max_th = 0
+                if templates_info:
+                    for t_info in templates_info:
+                        cached = get_cached_template(t_info, w)
+                        if cached:
+                            th_p = cached['th'] + int(t_info['padding'] * cached['proporcao'])
+                            if th_p > max_th:
+                                max_th = th_p
+                band_height = min(h, (max_th if max_th > 0 else 250) + 32)
+                if band_height > 0:
+                    bands_cache[f_path] = {
+                        'top': img_final[:band_height, :].copy(),
+                        'bottom': img_final[-band_height:, :].copy(),
+                        'h': h
+                    }
+            except Exception as e:
+                print(f"[DEBUG] Erro ao construir bands_cache para {f_path}: {e}")
+            
         with progress_lock:
             PROCESSING_TASKS[task_id]['processed_count'] += 1
             total = PROCESSING_TASKS[task_id]['total']
@@ -192,7 +240,7 @@ def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name
                 PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
 
-def process_task(task_id, mother_path, selected_folders, process_transitions=True):
+def process_task(task_id, mother_path, selected_folders, process_transitions=True, downsample_factor=1):
     start_time = time.time()
     
     # Invalida o cache global no início da execução de cada lote
@@ -286,14 +334,15 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             for _ in range(num_workers):
                 t_worker = threading.Thread(
                     target=processor_worker,
-                    args=(input_queue, output_queue, templates_info, THRESHOLD, task_id, folder_name),
+                    args=(input_queue, output_queue, templates_info, THRESHOLD, task_id, folder_name, downsample_factor),
                     daemon=True
                 )
                 t_worker.start()
                 workers.append(t_worker)
                 
             # 3. Executar o Gravador de forma síncrona na thread principal
-            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name)
+            bands_cache = {}
+            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name, templates_info, bands_cache)
             
             # Garantir encerramento das threads por segurança
             t_reader.join()
@@ -304,7 +353,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             if process_transitions:
                 PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
                 for i in range(len(arquivos) - 1):
-                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD)
+                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD, bands_cache)
                     
                     PROCESSING_TASKS[task_id]['processed_count'] += 1
                     total = PROCESSING_TASKS[task_id]['total']
@@ -327,7 +376,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
         duration = time.time() - start_time
         print(f"[DEBUG] Tarefa interrompida com erro após {duration:.2f} segundos.")
 
-def process_single_image(img_original, templates_info, threshold):
+def process_single_image(img_original, templates_info, threshold, downsample_factor=1):
     if len(img_original.shape) == 3 and img_original.shape[2] == 4:
         img_trabalho = img_original[:, :, :3].copy()
     elif len(img_original.shape) == 2:
@@ -338,6 +387,14 @@ def process_single_image(img_original, templates_info, threshold):
         
     width_real = img_trabalho.shape[1]
     alterou = False
+    
+    # Inicializa imagem reduzida uma única vez se o downsample estiver ativo
+    img_small = None
+    if downsample_factor > 1:
+        h_small = int(img_trabalho.shape[0] / downsample_factor)
+        w_small = int(img_trabalho.shape[1] / downsample_factor)
+        if h_small > 0 and w_small > 0:
+            img_small = cv2.resize(img_trabalho, (w_small, h_small), interpolation=cv2.INTER_AREA)
     
     for t_info in sorted(templates_info, key=lambda x: 1 if x['action_type'] == 'cut_y' else 0):
         cached = get_cached_template(t_info, width_real)
@@ -353,33 +410,106 @@ def process_single_image(img_original, templates_info, threshold):
 
         if tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]: continue
 
-        if has_transparency:
-            print(f"[DEBUG] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
+        # Se downsample_factor > 1, recuperamos o template reduzido do cache
+        downsample_factor_active = downsample_factor
+        if downsample_factor > 1:
+            ds_info = cached.get('downsample_cache', {}).get(downsample_factor, {})
+            tw_small = ds_info.get('tw_small', 0)
+            th_small = ds_info.get('th_small', 0)
+            temp_bgr_small = ds_info.get('temp_bgr_small')
+            temp_alpha_mask_small = ds_info.get('temp_alpha_mask_small')
+            
+            if tw_small > 0 and th_small > 0 and img_small is not None:
+                # Tudo pronto para busca piramidal
+                pass
+            else:
+                downsample_factor_active = 1
 
         match_count = 0
         while match_count < 100:  # Limite de segurança contra loop infinito
-            # Verifica se o template ainda cabe na imagem (importante após cortes)
-            if tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]:
-                print(f"[DEBUG] Template {t_info['name']} maior que a imagem restante. Pulando.")
-                break
-
-            if has_transparency:
-                # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
-                res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            
+            if downsample_factor > 1 and downsample_factor_active > 1:
+                # 1. Busca rápida na imagem reduzida (na CPU, pois é pequena)
+                if tw_small > img_small.shape[1] or th_small > img_small.shape[0]:
+                    break
+                    
+                if has_transparency:
+                    res_small = cv2.matchTemplate(img_small, temp_bgr_small, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask_small)
+                    _, max_val_small, _, max_loc_small = cv2.minMaxLoc(res_small)
+                else:
+                    res_small = cv2.matchTemplate(img_small, temp_bgr_small, cv2.TM_CCOEFF_NORMED)
+                    _, max_val_small, _, max_loc_small = cv2.minMaxLoc(res_small)
+                    
+                # Limiar tolerante para o match na imagem pequena
+                limiar_candidato = threshold - 0.05
+                if max_val_small < limiar_candidato:
+                    break
+                    
+                # 2. Projetar coordenadas de volta
+                x_proj = int(max_loc_small[0] * downsample_factor)
+                y_proj = int(max_loc_small[1] * downsample_factor)
+                
+                # 3. Recortar ROI ao redor do candidato na imagem original (margem de segurança)
+                margem = 16
+                y_ini_roi = max(0, y_proj - margem)
+                y_fim_roi = min(img_trabalho.shape[0], y_proj + th + margem)
+                x_ini_roi = max(0, x_proj - margem)
+                x_fim_roi = min(img_trabalho.shape[1], x_proj + tw + margem)
+                
+                if (y_fim_roi - y_ini_roi) < th or (x_fim_roi - x_ini_roi) < tw:
+                    break
+                    
+                roi_trabalho = img_trabalho[y_ini_roi:y_fim_roi, x_ini_roi:x_fim_roi]
+                
+                # 4. Fazer busca fina em alta resolução na ROI
+                if has_transparency:
+                    res_fino = cv2.matchTemplate(roi_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
+                    _, max_val, _, max_loc_fino = cv2.minMaxLoc(res_fino)
+                else:
+                    roi_umat = cv2.UMat(roi_trabalho)
+                    res_fino = cv2.matchTemplate(roi_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc_fino = cv2.minMaxLoc(res_fino)
+                    
+                if max_val < threshold:
+                    # Se na busca fina não bateu o threshold rígido, descartamos o candidato preenchendo o ponto no img_small
+                    x_ini_small = int(x_proj / downsample_factor)
+                    y_ini_small = int(y_proj / downsample_factor)
+                    x_fim_small = int((x_proj + tw) / downsample_factor)
+                    y_fim_small = int((y_proj + th) / downsample_factor)
+                    cv2.rectangle(img_small, (x_ini_small, y_ini_small), (x_fim_small, y_fim_small), t_info['fill_color'], -1)
+                    continue
+                    
+                y_topo = y_ini_roi + max_loc_fino[1]
+                x_esq = x_ini_roi + max_loc_fino[0]
             else:
-                # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
-                img_umat = cv2.UMat(img_trabalho)
-                res_umat = cv2.matchTemplate(img_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
-            if max_val < threshold: break
+                # Busca clássica em tela cheia de alta resolução
+                if tw > img_trabalho.shape[1] or th > img_trabalho.shape[0]:
+                    print(f"[DEBUG] Template {t_info['name']} maior que a imagem restante. Pulando.")
+                    break
+
+                if has_transparency:
+                    # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
+                    res = cv2.matchTemplate(img_trabalho, temp_bgr, cv2.TM_CCORR_NORMED, mask=temp_alpha_mask)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                else:
+                    # Usa TM_CCOEFF_NORMED com aceleração GPU (OpenCL)
+                    img_umat = cv2.UMat(img_trabalho)
+                    res_umat = cv2.matchTemplate(img_umat, temp_umat, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
+                    
+                if max_val < threshold: break
+                
+                y_topo, x_esq = max_loc[1], max_loc[0]
+
+            if has_transparency and match_count == 0:
+                print(f"[DEBUG] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
             
             match_count += 1
             
-            y_topo, x_esq = max_loc[1], max_loc[0]
+            y_topo_g, x_esq_g = y_topo, x_esq
             padding = int(t_info['padding'] * proporcao)
-            y_ini, y_fim = max(0, y_topo - padding), min(img_trabalho.shape[0], y_topo + th + padding)
-            x_ini, x_fim = max(0, x_esq - padding), min(img_trabalho.shape[1], x_esq + tw + padding)
+            y_ini, y_fim = max(0, y_topo_g - padding), min(img_trabalho.shape[0], y_topo_g + th + padding)
+            x_ini, x_fim = max(0, x_esq_g - padding), min(img_trabalho.shape[1], x_esq_g + tw + padding)
             
             if t_info['action_type'] == 'fill':
                 print(f"[DEBUG] Match found! Template: {t_info['name']} (Score: {max_val:.4f}). Action: FILL em {x_ini, y_ini}")
@@ -409,31 +539,78 @@ def process_single_image(img_original, templates_info, threshold):
                     cv2.rectangle(img_trabalho, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
                     if img_original is not img_trabalho: cv2.rectangle(img_original, (x_ini, y_ini), (x_fim, y_fim), t_info['fill_color'], -1)
                 
+                # Sincroniza a imagem reduzida pintando o local do match, evitando ter que re-gerar via resize
+                if downsample_factor > 1 and downsample_factor_active > 1 and img_small is not None:
+                    x_ini_small = max(0, int(x_ini / downsample_factor))
+                    y_ini_small = max(0, int(y_ini / downsample_factor))
+                    x_fim_small = min(img_small.shape[1], int(x_fim / downsample_factor))
+                    y_fim_small = min(img_small.shape[0], int(y_fim / downsample_factor))
+                    cv2.rectangle(img_small, (x_ini_small, y_ini_small), (x_fim_small, y_fim_small), t_info['fill_color'], -1)
+                
                 alterou = True
             elif t_info['action_type'] == 'cut_y':
                 print(f"[DEBUG] Match found! Template: {t_info['name']} (Score: {max_val:.4f}). Action: CUT_Y em y={y_ini}")
                 
-                # Se o template tiver máscara (alpha), usamos ela para um corte mais preciso se possível,
-                # mas para CUT_Y (que remove a linha inteira) o retângulo costuma ser suficiente.
-                # Se quiser um corte que respeite a forma lateral, seria 'cut_shape', mas aqui focamos no eixo Y.
                 img_trabalho = np.vstack([img_trabalho[:y_ini, :], img_trabalho[y_fim:, :]])
                 img_original = np.vstack([img_original[:y_ini, :], img_original[y_fim:, :]])
                 alterou = True
+                
+                # Se cortou no eixo Y, precisamos re-gerar a versão reduzida para a próxima iteração
+                if downsample_factor > 1 and downsample_factor_active > 1:
+                    h_small = int(img_trabalho.shape[0] / downsample_factor)
+                    w_small = int(img_trabalho.shape[1] / downsample_factor)
+                    if h_small > 0 and w_small > 0:
+                        img_small = cv2.resize(img_trabalho, (w_small, h_small), interpolation=cv2.INTER_AREA)
+                    else:
+                        img_small = None
+                    
+            # Mascaramos a área correspondente na imagem reduzida para evitar achar o mesmo ponto
+            if downsample_factor > 1 and downsample_factor_active > 1 and img_small is not None:
+                x_ini_small = max(0, int(x_ini / downsample_factor))
+                y_ini_small = max(0, int(y_ini / downsample_factor))
+                x_fim_small = min(img_small.shape[1], int(x_fim / downsample_factor))
+                y_fim_small = min(img_small.shape[0], int(y_fim / downsample_factor))
+                cv2.rectangle(img_small, (x_ini_small, y_ini_small), (x_fim_small, y_fim_small), t_info['fill_color'], -1)
+                
     return img_trabalho, img_original, alterou
 
-def process_transition(path_a, path_b, templates_info, threshold):
-    img_a, img_b = imread_unicode(path_a), imread_unicode(path_b)
-    if img_a is None or img_b is None or img_a.shape[1] != img_b.shape[1]: return
+def process_transition(path_a, path_b, templates_info, threshold, bands_cache=None):
+    # Tenta usar as bandas em cache na RAM para evitar ler arquivos PNG pesados do disco
+    cached_a = bands_cache.get(path_a) if bands_cache else None
+    cached_b = bands_cache.get(path_b) if bands_cache else None
+    
+    using_cache = False
+    img_a, img_b = None, None
+    
+    if cached_a and cached_b:
+        img_a_band = cached_a['bottom']
+        img_b_band = cached_b['top']
+        h_a = img_a_band.shape[0]  # Altura da banda de A
+        w_a = img_a_band.shape[1]
+        
+        # Garante o mesmo número de canais para o vstack
+        if img_a_band.shape[2] != img_b_band.shape[2]:
+            if img_a_band.shape[2] == 4 and img_b_band.shape[2] == 3:
+                img_b_band = cv2.cvtColor(img_b_band, cv2.COLOR_BGR2BGRA)
+            elif img_a_band.shape[2] == 3 and img_b_band.shape[2] == 4:
+                img_a_band = cv2.cvtColor(img_a_band, cv2.COLOR_BGR2BGRA)
+        
+        ponte = np.vstack([img_a_band, img_b_band])
+        using_cache = True
+    else:
+        # Fallback: lê as imagens originais completas do disco
+        img_a, img_b = imread_unicode(path_a), imread_unicode(path_b)
+        if img_a is None or img_b is None or img_a.shape[1] != img_b.shape[1]: return
+        
+        if img_a.shape[2] != img_b.shape[2]:
+            if img_a.shape[2] == 4 and img_b.shape[2] == 3:
+                img_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2BGRA)
+            elif img_a.shape[2] == 3 and img_b.shape[2] == 4:
+                img_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2BGRA)
+                
+        h_a, w_a = img_a.shape[:2]
+        ponte = np.vstack([img_a, img_b])
 
-    # Garantir que ambas tenham o mesmo número de canais para o vstack
-    if img_a.shape[2] != img_b.shape[2]:
-        if img_a.shape[2] == 4 and img_b.shape[2] == 3:
-            img_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2BGRA)
-        elif img_a.shape[2] == 3 and img_b.shape[2] == 4:
-            img_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2BGRA)
-
-    h_a, w_a = img_a.shape[:2]
-    ponte = np.vstack([img_a, img_b])
     ponte_trabalho = ponte[:, :, :3].copy() if len(ponte.shape) == 3 and ponte.shape[2] == 4 else ponte.copy()
     alterou_a, alterou_b = False, False
 
@@ -454,9 +631,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
             continue
 
         # Otimização de ROI (Região de Interesse):
-        # Como é um match de transição, o template obrigatoriamente cruza a linha de divisão h_a.
-        # Portanto, o topo do template (y_topo) precisa estar no intervalo [h_a - th, h_a].
-        # Podemos limitar a área de busca na ponte verticalmente para [h_a - th, h_a + th].
         y_crop_ini = max(0, h_a - th)
         y_crop_fim = min(ponte_trabalho.shape[0], h_a + th)
 
@@ -465,9 +639,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
             continue
 
         ponte_crop = ponte_trabalho[y_crop_ini:y_crop_fim, :]
-
-        if has_transparency:
-            print(f"[DEBUG] [Transição] Template '{t_info['name']}' possui transparência. Usando matching com máscara (CPU).")
 
         if has_transparency:
             # Usa TM_CCORR_NORMED que aceita máscara (geralmente CPU)
@@ -480,7 +651,28 @@ def process_transition(path_a, path_b, templates_info, threshold):
             _, max_val, _, max_loc = cv2.minMaxLoc(res_umat)
 
         if max_val >= threshold:
-            y_topo = y_crop_ini + max_loc[1]
+            y_topo_ponte = y_crop_ini + max_loc[1]
+            
+            # Se havia dado match usando as bandas de cache, precisamos agora carregar as imagens
+            # originais completas do disco para aplicar a alteração fisicamente e salvar.
+            if using_cache:
+                img_a, img_b = imread_unicode(path_a), imread_unicode(path_b)
+                if img_a is None or img_b is None or img_a.shape[1] != img_b.shape[1]: return
+                if img_a.shape[2] != img_b.shape[2]:
+                    if img_a.shape[2] == 4 and img_b.shape[2] == 3:
+                        img_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2BGRA)
+                    elif img_a.shape[2] == 3 and img_b.shape[2] == 4:
+                        img_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2BGRA)
+                
+                h_a_full = img_a.shape[0]
+                # Ajusta y_topo para a imagem completa
+                # A banda de A tinha altura h_a. O offset é (h_a_full - h_a)
+                y_topo = y_topo_ponte + (h_a_full - h_a)
+                h_a = h_a_full
+                using_cache = False  # Não está mais usando cache, carregou as originais
+            else:
+                y_topo = y_topo_ponte
+            
             if y_topo < h_a and (y_topo + th) > h_a:
                 padding = int(t_info['padding'] * proporcao)
                 y_ini, y_fim = y_topo - padding, y_topo + th + padding
@@ -489,13 +681,11 @@ def process_transition(path_a, path_b, templates_info, threshold):
                     
                     if temp_alpha_mask is not None:
                         # Aplicação mascarada na transição
-                        # Cria uma máscara para a área da transição na ponte
                         y_fim = y_topo + th
                         padding = int(t_info['padding'] * proporcao)
-                        y_ini_p, y_fim_p = max(0, y_topo - padding), min(ponte.shape[0], y_topo + th + padding)
+                        y_ini_p, y_fim_p = max(0, y_topo - padding), min(h_a + img_b.shape[0], y_topo + th + padding)
                         
                         mask_resized = cv2.resize(temp_alpha_mask, (w_a, y_fim_p - y_ini_p), interpolation=cv2.INTER_AREA)
-                        color_fill = np.full((y_fim_p - y_ini_p, w_a, 3), t_info['fill_color'], dtype=np.uint8)
                         mask_bool = mask_resized > 10
                         
                         # Divide a aplicação entre imagem A e B
@@ -540,5 +730,6 @@ def process_transition(path_a, path_b, templates_info, threshold):
                         alterou_b = True
                 break
 
-    if alterou_a: imwrite_unicode(path_a, img_a)
-    if alterou_b: imwrite_unicode(path_b, img_b)
+    if not using_cache:
+        if alterou_a and img_a is not None: imwrite_unicode(path_a, img_a)
+        if alterou_b and img_b is not None: imwrite_unicode(path_b, img_b)
