@@ -4,6 +4,7 @@ import numpy as np
 import uuid
 import time
 import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from django.conf import settings
@@ -147,23 +148,48 @@ def start_processing_thread(mother_path, selected_folders, process_transitions=T
     thread.start()
     return task_id
 
-def process_single_file(file_path, templates_info, threshold, task_id, progress_lock, folder_name):
-    try:
-        PROCESSING_TASKS[task_id]['current_file'] = f"[{folder_name}] {os.path.basename(file_path)}"
-        img = imread_unicode(file_path)
-        if img is not None:
-            _, img_final, alterou = process_single_image(img, templates_info, threshold)
-            if alterou:
-                print(f"[DEBUG] Imagem alterada e salva: {os.path.basename(file_path)}")
-                imwrite_unicode(file_path, img_final)
-        
+def reader_worker(arquivos, input_queue):
+    """ Thread produtora: Lê imagens do disco e coloca na fila de entrada. """
+    for f_path in arquivos:
+        img = imread_unicode(f_path)
+        input_queue.put((f_path, img))
+    input_queue.put(None)  # Sinaliza fim dos arquivos
+
+def processor_worker(input_queue, output_queue, templates_info, threshold, task_id, folder_name):
+    """ Threads trabalhadoras: Consomem da fila de entrada, processam e colocam na fila de saída. """
+    while True:
+        item = input_queue.get()
+        if item is None:
+            input_queue.put(None)  # Repassa o sinal para outros workers
+            break
+        f_path, img = item
+        try:
+            PROCESSING_TASKS[task_id]['current_file'] = f"[{folder_name}] {os.path.basename(f_path)}"
+            if img is not None:
+                _, img_final, alterou = process_single_image(img, templates_info, threshold)
+                output_queue.put((f_path, img_final, alterou))
+            else:
+                output_queue.put((f_path, None, False))
+        except Exception as e:
+            print(f"[DEBUG] Erro ao processar arquivo {f_path} no worker: {e}")
+            output_queue.put((f_path, None, False))
+
+def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name):
+    """ Thread consumidora: Retira da fila de saída, grava no disco e atualiza progresso. """
+    for _ in range(total_files):
+        f_path, img_final, alterou = output_queue.get()
+        try:
+            if alterou and img_final is not None:
+                print(f"[DEBUG] Imagem alterada e salva: {os.path.basename(f_path)}")
+                imwrite_unicode(f_path, img_final)
+        except Exception as e:
+            print(f"[DEBUG] Erro ao salvar arquivo {f_path}: {e}")
+            
         with progress_lock:
             PROCESSING_TASKS[task_id]['processed_count'] += 1
             total = PROCESSING_TASKS[task_id]['total']
             if total > 0:
                 PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
-    except Exception as e:
-        print(f"[DEBUG] Erro ao processar arquivo {file_path}: {e}")
 
 
 def process_task(task_id, mother_path, selected_folders, process_transitions=True):
@@ -239,9 +265,39 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             
             progress_lock = threading.Lock()
             
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                worker = partial(process_single_file, templates_info=templates_info, threshold=THRESHOLD, task_id=task_id, progress_lock=progress_lock, folder_name=folder_name)
-                executor.map(worker, arquivos)
+            # Fase 1: Individual (via Pipeline Produtor-Consumidor)
+            print(f"[DEBUG] Iniciando Fase 1 (Individual) com Pipeline para pasta: {folder_name}")
+            
+            input_queue = queue.Queue(maxsize=16)
+            output_queue = queue.Queue(maxsize=16)
+            
+            # 1. Iniciar Thread de Leitura (Produtor)
+            t_reader = threading.Thread(
+                target=reader_worker,
+                args=(arquivos, input_queue),
+                daemon=True
+            )
+            t_reader.start()
+            
+            # 2. Iniciar Threads de Processamento (Workers)
+            num_workers = 4
+            workers = []
+            for _ in range(num_workers):
+                t_worker = threading.Thread(
+                    target=processor_worker,
+                    args=(input_queue, output_queue, templates_info, THRESHOLD, task_id, folder_name),
+                    daemon=True
+                )
+                t_worker.start()
+                workers.append(t_worker)
+                
+            # 3. Executar o Gravador de forma síncrona na thread principal
+            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name)
+            
+            # Garantir encerramento das threads por segurança
+            t_reader.join()
+            for w in workers:
+                w.join()
 
             # Fase 2: Transição
             if process_transitions:
