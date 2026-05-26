@@ -1,348 +1,525 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Processador de Templates - ♻️ Editor e Removedor</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♻️</text></svg>">
-    <style>
-        :root {
-            --bg-color: #0f172a;
-            --panel-bg: rgba(30, 41, 59, 0.7);
-            --accent: #3b82f6;
-            --accent-hover: #2563eb;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --success: #22c55e;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            min-height: 100vh;
-        }
-
-        .header {
-            background: var(--panel-bg);
-            padding: 1rem 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .logo {
-            font-size: 1.5rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, #60a5fa, #a78bfa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-decoration: none;
-        }
-
-        .container {
-            max-width: 800px;
-            margin: 3rem auto;
-            padding: 2rem;
-            background: var(--panel-bg);
-            border-radius: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-        }
-
-        h2 { margin-top: 0; }
-
-        .input-group {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
-        input[type="text"] {
-            flex: 1;
-            background: rgba(15, 23, 42, 0.8);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 0.8rem 1rem;
-            border-radius: 8px;
-            outline: none;
-        }
-
-        .btn {
-            background: var(--accent);
-            color: white;
-            border: none;
-            padding: 0.8rem 1.5rem;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
-        .btn:disabled { background: #475569; cursor: not-allowed; }
-
-        .folder-list {
-            max-height: 300px;
-            overflow-y: auto;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 2rem;
-            display: none;
-        }
-
-        .folder-item {
-            display: flex;
-            align-items: center;
-            gap: 0.8rem;
-            padding: 0.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        }
-
-        .progress-container {
-            display: none;
-            margin-top: 2rem;
-        }
-
-        .progress-bar-bg {
-            background: rgba(255, 255, 255, 0.1);
-            height: 12px;
-            border-radius: 6px;
-            overflow: hidden;
-            margin-bottom: 1rem;
-        }
-
-        .progress-bar-fill {
-            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-            height: 100%;
-            width: 0%;
-            transition: width 0.3s ease;
-        }
-
-        .status-text {
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            text-align: center;
-        }
-
-        .current-file {
-            font-family: monospace;
-            color: var(--accent);
-            display: block;
-            margin-top: 0.5rem;
-        }
-
-        .options-container {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            padding: 1rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            margin-bottom: 2rem;
-            display: none;
-        }
-    </style>
-</head>
-<body>
-
-    <header class="header">
-        <a href="{% url 'home' %}" class="logo">♻️ Editor e Removedor</a>
-        <a href="{% url 'home' %}" class="btn" style="background: transparent; border: 1px solid var(--accent);">Voltar</a>
-    </header>
-
-    <div class="container">
-        <h2>Processador em Lote</h2>
-        <p style="color: var(--text-muted);">Insira o caminho da pasta mãe para encontrar subpastas com imagens.</p>
-
-        <div class="input-group" id="input-section">
-            <input type="text" id="mother-path" placeholder="Ex: C:\MeusProjetos\Imagens" value="">
-            <button class="btn" id="btn-browse" style="background: #4b5563;">Selecionar Pasta</button>
-            <button class="btn" id="btn-scan">Escanear Pastas</button>
-        </div>
-
-        <div class="folder-list" id="folder-list">
-            <!-- Pastas aparecerão aqui -->
-        </div>
-
-        <div class="options-container" id="options-section">
-            <div style="font-weight: 600; margin-bottom: 10px; font-size: 0.95rem; color: var(--text-main);">Opções de Processamento:</div>
-            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; user-select: none; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
-                <input type="checkbox" id="chk-transitions" checked style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent);">
-                <span>Analisar e limpar transições entre imagens (quebras de página)</span>
-            </label>
-            <div style="display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 1rem;">
-                <label for="sel-downsample" style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Fator de Redução de Resolução (Downsampling):</label>
-                <select id="sel-downsample" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.2); color: white; padding: 0.8rem 1rem; border-radius: 8px; outline: none; width: 100%; cursor: pointer; font-family: inherit; font-size: 0.9rem; transition: border-color 0.2s;">
-                    <option value="1">Desativado (Usar resolução original)</option>
-                    <option value="2">2x (Processamento mais rápido)</option>
-                    <option value="4" selected>4x (Processamento ultra rápido - recomendado para páginas longas)</option>
-                </select>
-                <small style="font-size: 0.8rem; color: var(--text-muted); display: block; line-height: 1.4;">
-                    Reduz a imagem de trabalho temporariamente para acelerar a busca grosseira de templates, refinando-a em resolução original em seguida. 
-                    Se um template for muito pequeno (ex: ícone &lt; 80px), o downsampling é automaticamente adaptado para evitar falhas de escala.
-                </small>
-            </div>
-            <div style="border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 1rem; margin-top: 0.5rem;">
-                <label style="display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; user-select: none; font-size: 0.9rem; color: var(--text-muted);">
-                    <input type="checkbox" id="chk-webp-lossless" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); margin-top: 2px; flex-shrink: 0;">
-                    <span>
-                        Salvar WebP sem perda (lossless)
-                        <small style="display: block; font-size: 0.78rem; color: #64748b; margin-top: 2px; line-height: 1.4;">
-                            ⚠️ Gera arquivos maiores e é <strong style="color: #f59e0b;">~6x mais lento</strong> para salvar. Recomendado apenas quando a qualidade máxima é crítica.
-                        </small>
-                    </span>
-                </label>
-            </div>
-        </div>
-
-        <div style="text-align: right; display: none;" id="action-section">
-            <button class="btn" id="btn-start" style="background: var(--success);">Iniciar Limpeza</button>
-        </div>
-
-        <div class="progress-container" id="progress-container">
-            <div class="progress-bar-bg">
-                <div class="progress-bar-fill" id="progress-fill"></div>
-            </div>
-            <div class="status-text">
-                <span id="status-msg">Processando imagens...</span>
-                <span id="progress-perc">0%</span>
-                <span class="current-file" id="current-file"></span>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const btnScan = document.getElementById('btn-scan');
-        const btnStart = document.getElementById('btn-start');
-        const motherPathInput = document.getElementById('mother-path');
-        const folderList = document.getElementById('folder-list');
-        const actionSection = document.getElementById('action-section');
-        const progressContainer = document.getElementById('progress-container');
-        const inputSection = document.getElementById('input-section');
-        const btnBrowse = document.getElementById('btn-browse');
-
-        btnBrowse.addEventListener('click', async () => {
-            try {
-                const response = await fetch('/selecionar-pasta/');
-                const data = await response.json();
-                if (data.sucesso && data.caminho) {
-                    motherPathInput.value = data.caminho;
-                }
-            } catch (e) {
-                alert('Erro ao abrir o seletor.');
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Processador de Templates - ♻️ Editor e Removedor</title>
+        <link
+            rel="icon"
+            href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♻️</text></svg>"
+        />
+        <style>
+            :root {
+                --bg-color: #0f172a;
+                --panel-bg: rgba(30, 41, 59, 0.7);
+                --accent: #3b82f6;
+                --accent-hover: #2563eb;
+                --text-main: #f8fafc;
+                --text-muted: #94a3b8;
+                --success: #22c55e;
             }
-        });
 
-        btnScan.addEventListener('click', async () => {
-            const path = motherPathInput.value.trim();
-            if (!path) return alert('Por favor, digite o caminho.');
+            body {
+                margin: 0;
+                padding: 0;
+                font-family: "Inter", sans-serif;
+                background-color: var(--bg-color);
+                color: var(--text-main);
+                min-height: 100vh;
+            }
 
-            btnScan.disabled = true;
-            btnScan.innerText = 'Escaneando...';
+            .header {
+                background: var(--panel-bg);
+                padding: 1rem 2rem;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            }
 
-            try {
-                const response = await fetch('/scan-folders/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path })
-                });
-                const data = await response.json();
+            .logo {
+                font-size: 1.5rem;
+                font-weight: 700;
+                background: linear-gradient(135deg, #60a5fa, #a78bfa);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                text-decoration: none;
+            }
 
-                if (data.success && data.folders.length > 0) {
-                    folderList.innerHTML = '<div style="margin-bottom: 10px; font-weight: 600;">Selecione as subpastas:</div>';
-                    data.folders.forEach(folder => {
-                        folderList.innerHTML += `
+            .container {
+                max-width: 800px;
+                margin: 3rem auto;
+                padding: 2rem;
+                background: var(--panel-bg);
+                border-radius: 16px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+            }
+
+            h2 {
+                margin-top: 0;
+            }
+
+            .input-group {
+                display: flex;
+                gap: 1rem;
+                margin-bottom: 2rem;
+            }
+
+            input[type="text"] {
+                flex: 1;
+                background: rgba(15, 23, 42, 0.8);
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                color: white;
+                padding: 0.8rem 1rem;
+                border-radius: 8px;
+                outline: none;
+            }
+
+            .btn {
+                background: var(--accent);
+                color: white;
+                border: none;
+                padding: 0.8rem 1.5rem;
+                border-radius: 8px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+
+            .btn:hover {
+                background: var(--accent-hover);
+                transform: translateY(-1px);
+            }
+            .btn:disabled {
+                background: #475569;
+                cursor: not-allowed;
+            }
+
+            .folder-list {
+                max-height: 300px;
+                overflow-y: auto;
+                background: rgba(0, 0, 0, 0.2);
+                border-radius: 8px;
+                padding: 1rem;
+                margin-bottom: 2rem;
+                display: none;
+            }
+
+            .folder-item {
+                display: flex;
+                align-items: center;
+                gap: 0.8rem;
+                padding: 0.5rem;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            }
+
+            .progress-container {
+                display: none;
+                margin-top: 2rem;
+            }
+
+            .progress-bar-bg {
+                background: rgba(255, 255, 255, 0.1);
+                height: 12px;
+                border-radius: 6px;
+                overflow: hidden;
+                margin-bottom: 1rem;
+            }
+
+            .progress-bar-fill {
+                background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+                height: 100%;
+                width: 0%;
+                transition: width 0.3s ease;
+            }
+
+            .status-text {
+                font-size: 0.9rem;
+                color: var(--text-muted);
+                text-align: center;
+            }
+
+            .current-file {
+                font-family: monospace;
+                color: var(--accent);
+                display: block;
+                margin-top: 0.5rem;
+            }
+
+            .options-container {
+                background: rgba(255, 255, 255, 0.05);
+                border-radius: 8px;
+                padding: 1rem;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                margin-bottom: 2rem;
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <header class="header">
+            <a href="{% url 'home' %}" class="logo">♻️ Editor e Removedor</a>
+            <a
+                href="{% url 'home' %}"
+                class="btn"
+                style="background: transparent; border: 1px solid var(--accent)"
+                >Voltar</a
+            >
+        </header>
+
+        <div class="container">
+            <h2>Processador em Lote</h2>
+            <p style="color: var(--text-muted)">
+                Insira o caminho da pasta mãe para encontrar subpastas com
+                imagens.
+            </p>
+
+            <div class="input-group" id="input-section">
+                <input
+                    type="text"
+                    id="mother-path"
+                    placeholder="Ex: C:\MeusProjetos\Imagens"
+                    value=""
+                />
+                <button class="btn" id="btn-browse" style="background: #4b5563">
+                    Selecionar Pasta
+                </button>
+                <button class="btn" id="btn-scan">Escanear Pastas</button>
+            </div>
+
+            <div class="folder-list" id="folder-list">
+                <!-- Pastas aparecerão aqui -->
+            </div>
+
+            <div class="options-container" id="options-section">
+                <div
+                    style="
+                        font-weight: 600;
+                        margin-bottom: 10px;
+                        font-size: 0.95rem;
+                        color: var(--text-main);
+                    "
+                >
+                    Opções de Processamento:
+                </div>
+                <label
+                    style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.6rem;
+                        cursor: pointer;
+                        user-select: none;
+                        font-size: 0.9rem;
+                        color: var(--text-muted);
+                        margin-bottom: 1rem;
+                    "
+                >
+                    <input
+                        type="checkbox"
+                        id="chk-transitions"
+                        style="
+                            width: 16px;
+                            height: 16px;
+                            cursor: pointer;
+                            accent-color: var(--accent);
+                        "
+                    />
+                    <span
+                        >Analisar e limpar transições entre imagens (quebras de
+                        página)</span
+                    >
+                </label>
+                <div
+                    style="
+                        display: flex;
+                        flex-direction: column;
+                        gap: 0.5rem;
+                        border-top: 1px solid rgba(255, 255, 255, 0.1);
+                        padding-top: 1rem;
+                    "
+                >
+                    <label
+                        for="sel-downsample"
+                        style="
+                            font-size: 0.9rem;
+                            color: var(--text-muted);
+                            font-weight: 500;
+                        "
+                        >Fator de Redução de Resolução (Downsampling):</label
+                    >
+                    <select
+                        id="sel-downsample"
+                        style="
+                            background: rgba(15, 23, 42, 0.8);
+                            border: 1px solid rgba(255, 255, 255, 0.2);
+                            color: white;
+                            padding: 0.8rem 1rem;
+                            border-radius: 8px;
+                            outline: none;
+                            width: 100%;
+                            cursor: pointer;
+                            font-family: inherit;
+                            font-size: 0.9rem;
+                            transition: border-color 0.2s;
+                        "
+                    >
+                        <option value="1">
+                            Desativado (Usar resolução original)
+                        </option>
+                        <option value="2">
+                            2x (Processamento mais rápido)
+                        </option>
+                        <option value="4" selected>
+                            4x (Processamento ultra rápido - recomendado para
+                            páginas longas)
+                        </option>
+                    </select>
+                    <small
+                        style="
+                            font-size: 0.8rem;
+                            color: var(--text-muted);
+                            display: block;
+                            line-height: 1.4;
+                        "
+                    >
+                        Reduz a imagem de trabalho temporariamente para acelerar
+                        a busca grosseira de templates, refinando-a em resolução
+                        original em seguida. Se um template for muito pequeno
+                        (ex: ícone &lt; 80px), o downsampling é automaticamente
+                        adaptado para evitar falhas de escala.
+                    </small>
+                </div>
+                <div
+                    style="
+                        border-top: 1px solid rgba(255, 255, 255, 0.1);
+                        padding-top: 1rem;
+                        margin-top: 0.5rem;
+                    "
+                >
+                    <label
+                        style="
+                            display: flex;
+                            align-items: flex-start;
+                            gap: 0.6rem;
+                            cursor: pointer;
+                            user-select: none;
+                            font-size: 0.9rem;
+                            color: var(--text-muted);
+                        "
+                    >
+                        <input
+                            type="checkbox"
+                            id="chk-webp-lossless"
+                            style="
+                                width: 16px;
+                                height: 16px;
+                                cursor: pointer;
+                                accent-color: var(--accent);
+                                margin-top: 2px;
+                                flex-shrink: 0;
+                            "
+                        />
+                        <span>
+                            Salvar WebP sem perda (lossless)
+                            <small
+                                style="
+                                    display: block;
+                                    font-size: 0.78rem;
+                                    color: #64748b;
+                                    margin-top: 2px;
+                                    line-height: 1.4;
+                                "
+                            >
+                                ⚠️ Gera arquivos maiores e é
+                                <strong style="color: #f59e0b"
+                                    >~6x mais lento</strong
+                                >
+                                para salvar. Recomendado apenas quando a
+                                qualidade máxima é crítica.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+            </div>
+
+            <div style="text-align: right; display: none" id="action-section">
+                <button
+                    class="btn"
+                    id="btn-start"
+                    style="background: var(--success)"
+                >
+                    Iniciar Limpeza
+                </button>
+            </div>
+
+            <div class="progress-container" id="progress-container">
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progress-fill"></div>
+                </div>
+                <div class="status-text">
+                    <span id="status-msg">Processando imagens...</span>
+                    <span id="progress-perc">0%</span>
+                    <span class="current-file" id="current-file"></span>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            const btnScan = document.getElementById("btn-scan");
+            const btnStart = document.getElementById("btn-start");
+            const motherPathInput = document.getElementById("mother-path");
+            const folderList = document.getElementById("folder-list");
+            const actionSection = document.getElementById("action-section");
+            const progressContainer =
+                document.getElementById("progress-container");
+            const inputSection = document.getElementById("input-section");
+            const btnBrowse = document.getElementById("btn-browse");
+
+            btnBrowse.addEventListener("click", async () => {
+                try {
+                    const response = await fetch("/selecionar-pasta/");
+                    const data = await response.json();
+                    if (data.sucesso && data.caminho) {
+                        motherPathInput.value = data.caminho;
+                    }
+                } catch (e) {
+                    alert("Erro ao abrir o seletor.");
+                }
+            });
+
+            btnScan.addEventListener("click", async () => {
+                const path = motherPathInput.value.trim();
+                if (!path) return alert("Por favor, digite o caminho.");
+
+                btnScan.disabled = true;
+                btnScan.innerText = "Escaneando...";
+
+                try {
+                    const response = await fetch("/scan-folders/", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ path }),
+                    });
+                    const data = await response.json();
+
+                    if (data.success && data.folders.length > 0) {
+                        folderList.innerHTML =
+                            '<div style="margin-bottom: 10px; font-weight: 600;">Selecione as subpastas:</div>';
+                        data.folders.forEach((folder) => {
+                            folderList.innerHTML += `
                             <div class="folder-item">
                                 <input type="checkbox" class="folder-checkbox" value="${folder}" checked>
                                 <span>${folder}</span>
                             </div>
                         `;
-                    });
-                    folderList.style.display = 'block';
-                    document.getElementById('options-section').style.display = 'block';
-                    actionSection.style.display = 'block';
-                } else {
-                    alert('Nenhuma pasta com imagens encontrada no diretório informado.');
+                        });
+                        folderList.style.display = "block";
+                        document.getElementById(
+                            "options-section",
+                        ).style.display = "block";
+                        actionSection.style.display = "block";
+                    } else {
+                        alert(
+                            "Nenhuma pasta com imagens encontrada no diretório informado.",
+                        );
+                    }
+                } catch (e) {
+                    alert("Erro ao conectar com o servidor.");
+                } finally {
+                    btnScan.disabled = false;
+                    btnScan.innerText = "Escanear Pastas";
                 }
-            } catch (e) {
-                alert('Erro ao conectar com o servidor.');
-            } finally {
-                btnScan.disabled = false;
-                btnScan.innerText = 'Escanear Pastas';
-            }
-        });
+            });
 
-        btnStart.addEventListener('click', async () => {
-            const selectedFolders = Array.from(document.querySelectorAll('.folder-checkbox:checked')).map(cb => cb.value);
-            if (selectedFolders.length === 0) return alert('Selecione ao menos uma pasta.');
+            btnStart.addEventListener("click", async () => {
+                const selectedFolders = Array.from(
+                    document.querySelectorAll(".folder-checkbox:checked"),
+                ).map((cb) => cb.value);
+                if (selectedFolders.length === 0)
+                    return alert("Selecione ao menos uma pasta.");
 
-            const path = motherPathInput.value.trim();
-            const processTransitions = document.getElementById('chk-transitions').checked;
-            const downsampleFactor = parseInt(document.getElementById('sel-downsample').value) || 1;
-            const webpLossless = document.getElementById('chk-webp-lossless').checked;
+                const path = motherPathInput.value.trim();
+                const processTransitions =
+                    document.getElementById("chk-transitions").checked;
+                const downsampleFactor =
+                    parseInt(document.getElementById("sel-downsample").value) ||
+                    1;
+                const webpLossless =
+                    document.getElementById("chk-webp-lossless").checked;
 
-            try {
-                const response = await fetch('/start-processing/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        path, 
-                        folders: selectedFolders, 
-                        process_transitions: processTransitions,
-                        downsample_factor: downsampleFactor,
-                        webp_lossless: webpLossless
-                    })
-                });
-                const data = await response.json();
-
-                if (data.success) {
-                    // Mudar UI para progresso
-                    inputSection.style.display = 'none';
-                    folderList.style.display = 'none';
-                    document.getElementById('options-section').style.display = 'none';
-                    actionSection.style.display = 'none';
-                    progressContainer.style.display = 'block';
-                    
-                    pollProgress(data.task_id);
-                } else {
-                    alert('Erro ao iniciar: ' + data.error);
-                }
-            } catch (e) {
-                alert('Erro ao conectar.');
-            }
-        });
-
-        function pollProgress(taskId) {
-            const interval = setInterval(async () => {
                 try {
-                    const response = await fetch(`/progress/${taskId}/`);
+                    const response = await fetch("/start-processing/", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            path,
+                            folders: selectedFolders,
+                            process_transitions: processTransitions,
+                            downsample_factor: downsampleFactor,
+                            webp_lossless: webpLossless,
+                        }),
+                    });
                     const data = await response.json();
 
                     if (data.success) {
-                        const task = data.task;
-                        document.getElementById('progress-fill').style.width = task.progress + '%';
-                        document.getElementById('progress-perc').innerText = task.progress + '%';
-                        document.getElementById('status-msg').innerText = task.message;
-                        document.getElementById('current-file').innerText = task.current_file;
+                        // Mudar UI para progresso
+                        inputSection.style.display = "none";
+                        folderList.style.display = "none";
+                        document.getElementById(
+                            "options-section",
+                        ).style.display = "none";
+                        actionSection.style.display = "none";
+                        progressContainer.style.display = "block";
 
-                        if (task.status === 'completed' || task.status === 'error') {
-                            clearInterval(interval);
-                            if (task.status === 'completed') {
-                                setTimeout(() => alert('Concluído com sucesso!'), 500);
-                            } else {
-                                alert('Erro: ' + task.error);
-                            }
-                        }
+                        pollProgress(data.task_id);
+                    } else {
+                        alert("Erro ao iniciar: " + data.error);
                     }
                 } catch (e) {
-                    clearInterval(interval);
-                    console.error('Erro no polling', e);
+                    alert("Erro ao conectar.");
                 }
-            }, 1000);
-        }
-    </script>
-</body>
+            });
+
+            function pollProgress(taskId) {
+                const interval = setInterval(async () => {
+                    try {
+                        const response = await fetch(`/progress/${taskId}/`);
+                        const data = await response.json();
+
+                        if (data.success) {
+                            const task = data.task;
+                            document.getElementById(
+                                "progress-fill",
+                            ).style.width = task.progress + "%";
+                            document.getElementById("progress-perc").innerText =
+                                task.progress + "%";
+                            document.getElementById("status-msg").innerText =
+                                task.message;
+                            document.getElementById("current-file").innerText =
+                                task.current_file;
+
+                            if (
+                                task.status === "completed" ||
+                                task.status === "error"
+                            ) {
+                                clearInterval(interval);
+                                if (task.status === "completed") {
+                                    setTimeout(
+                                        () => alert("Concluído com sucesso!"),
+                                        500,
+                                    );
+                                } else {
+                                    alert("Erro: " + task.error);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        clearInterval(interval);
+                        console.error("Erro no polling", e);
+                    }
+                }, 1000);
+            }
+        </script>
+    </body>
 </html>
