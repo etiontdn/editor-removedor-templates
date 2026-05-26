@@ -17,7 +17,7 @@ print(f"[DEBUG] OpenCL ativado no motor: {cv2.ocl.useOpenCL()}")
 # Dicionário global para controlar o status de cada thread em andamento
 PROCESSING_TASKS = {}
 
-# Cache global para templates redimensionados e UMat na GPU (Chave: (template_name, target_width))
+# Cache global para templates redimensionados e UMat na GPU (Chave: (template_id, target_width))
 TEMPLATE_CACHE = {}
 TEMPLATE_CACHE_LOCK = threading.Lock()
 
@@ -25,7 +25,7 @@ def get_cached_template(t_info, target_width):
     """
     Retorna o template redimensionado e preparado para matching (com cache thread-safe).
     """
-    cache_key = (t_info['name'], target_width)
+    cache_key = (t_info['id'], target_width)
     
     with TEMPLATE_CACHE_LOCK:
         cached = TEMPLATE_CACHE.get(cache_key)
@@ -211,6 +211,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             template_img = imread_unicode(img_path)
             if template_img is not None:
                 templates_info.append({
+                    'id': t.id,
                     'img': template_img,
                     'original_width': t.original_width,
                     'action_type': t.action_type,
