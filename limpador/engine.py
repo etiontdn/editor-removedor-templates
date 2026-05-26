@@ -106,13 +106,16 @@ def imread_unicode(path):
         print(f"[DEBUG] Erro ao ler arquivo {path}: {e}")
         return None
 
-def imwrite_unicode(path, img):
+def imwrite_unicode(path, img, webp_lossless=False):
     """ Salva uma imagem em um caminho que contém acentos ou caracteres especiais com qualidade otimizada. """
     try:
         ext = os.path.splitext(path)[1].lower()
         params = []
         if ext == '.webp':
-            params = [int(cv2.IMWRITE_WEBP_QUALITY), 80]
+            if webp_lossless:
+                params = [int(cv2.IMWRITE_WEBP_QUALITY), 101]  # 101 = lossless no OpenCV
+            else:
+                params = [int(cv2.IMWRITE_WEBP_QUALITY), 80]
         elif ext in ['.jpg', '.jpeg']:
             params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
             
@@ -158,7 +161,7 @@ def hex_to_bgr(hex_color):
         return (b, g, r)
     return (255, 255, 255)
 
-def start_processing_thread(mother_path, selected_folders, process_transitions=True, downsample_factor=1):
+def start_processing_thread(mother_path, selected_folders, process_transitions=True, downsample_factor=1, webp_lossless=False):
     task_id = str(uuid.uuid4())
     PROCESSING_TASKS[task_id] = {
         'status': 'in_progress',
@@ -169,7 +172,7 @@ def start_processing_thread(mother_path, selected_folders, process_transitions=T
         'message': 'Inicializando...',
         'error': None
     }
-    thread = threading.Thread(target=process_task, args=(task_id, mother_path, selected_folders, process_transitions, downsample_factor))
+    thread = threading.Thread(target=process_task, args=(task_id, mother_path, selected_folders, process_transitions, downsample_factor, webp_lossless))
     thread.daemon = True
     thread.start()
     return task_id
@@ -200,14 +203,14 @@ def processor_worker(input_queue, output_queue, templates_info, threshold, task_
             print(f"[DEBUG] Erro ao processar arquivo {f_path} no worker: {e}")
             output_queue.put((f_path, None, False))
 
-def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name, templates_info=None, bands_cache=None):
+def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name, templates_info=None, bands_cache=None, webp_lossless=False):
     """ Thread consumidora: Retira da fila de saída, grava no disco e atualiza progresso. """
     for _ in range(total_files):
         f_path, img_final, alterou = output_queue.get()
         try:
             if alterou and img_final is not None:
                 print(f"[DEBUG] Imagem alterada e salva: {os.path.basename(f_path)}")
-                imwrite_unicode(f_path, img_final)
+                imwrite_unicode(f_path, img_final, webp_lossless=webp_lossless)
         except Exception as e:
             print(f"[DEBUG] Erro ao salvar arquivo {f_path}: {e}")
             
@@ -240,7 +243,7 @@ def writer_worker(output_queue, total_files, task_id, progress_lock, folder_name
                 PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
 
-def process_task(task_id, mother_path, selected_folders, process_transitions=True, downsample_factor=1):
+def process_task(task_id, mother_path, selected_folders, process_transitions=True, downsample_factor=1, webp_lossless=False):
     start_time = time.time()
     
     # Invalida o cache global no início da execução de cada lote
@@ -342,7 +345,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
                 
             # 3. Executar o Gravador de forma síncrona na thread principal
             bands_cache = {}
-            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name, templates_info, bands_cache)
+            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name, templates_info, bands_cache, webp_lossless=webp_lossless)
             
             # Garantir encerramento das threads por segurança
             t_reader.join()
@@ -353,7 +356,7 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             if process_transitions:
                 PROCESSING_TASKS[task_id]['message'] = f"Analisando transições na pasta: {folder_name}"
                 for i in range(len(arquivos) - 1):
-                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD, bands_cache)
+                    process_transition(arquivos[i], arquivos[i+1], templates_info, THRESHOLD, bands_cache, webp_lossless=webp_lossless)
                     
                     PROCESSING_TASKS[task_id]['processed_count'] += 1
                     total = PROCESSING_TASKS[task_id]['total']
@@ -574,7 +577,7 @@ def process_single_image(img_original, templates_info, threshold, downsample_fac
                 
     return img_trabalho, img_original, alterou
 
-def process_transition(path_a, path_b, templates_info, threshold, bands_cache=None):
+def process_transition(path_a, path_b, templates_info, threshold, bands_cache=None, webp_lossless=False):
     # Tenta usar as bandas em cache na RAM para evitar ler arquivos PNG pesados do disco
     cached_a = bands_cache.get(path_a) if bands_cache else None
     cached_b = bands_cache.get(path_b) if bands_cache else None
@@ -731,5 +734,5 @@ def process_transition(path_a, path_b, templates_info, threshold, bands_cache=No
                 break
 
     if not using_cache:
-        if alterou_a and img_a is not None: imwrite_unicode(path_a, img_a)
-        if alterou_b and img_b is not None: imwrite_unicode(path_b, img_b)
+        if alterou_a and img_a is not None: imwrite_unicode(path_a, img_a, webp_lossless=webp_lossless)
+        if alterou_b and img_b is not None: imwrite_unicode(path_b, img_b, webp_lossless=webp_lossless)

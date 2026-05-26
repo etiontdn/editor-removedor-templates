@@ -163,13 +163,14 @@ def start_processing_api(request):
             selected_folders = data.get('folders', [])
             process_transitions = data.get('process_transitions', True)
             downsample_factor = int(data.get('downsample_factor', 1))
-            print(f"[DEBUG] API: start_processing_api chamado. Path: {mother_path}, Folders: {selected_folders}, Process transitions: {process_transitions}, Downsample: {downsample_factor}")
+            webp_lossless = bool(data.get('webp_lossless', False))
+            print(f"[DEBUG] API: start_processing_api chamado. Path: {mother_path}, Folders: {selected_folders}, Process transitions: {process_transitions}, Downsample: {downsample_factor}, WebP Lossless: {webp_lossless}")
             
             if not mother_path or not selected_folders:
                 print("[DEBUG] API: Erro - Caminho ou pastas não fornecidas.")
                 return JsonResponse({'success': False, 'error': 'Caminho ou pastas não selecionadas.'})
                 
-            task_id = start_processing_thread(mother_path, selected_folders, process_transitions=process_transitions, downsample_factor=downsample_factor)
+            task_id = start_processing_thread(mother_path, selected_folders, process_transitions=process_transitions, downsample_factor=downsample_factor, webp_lossless=webp_lossless)
             print(f"[DEBUG] API: Thread iniciada. Task ID: {task_id}")
             return JsonResponse({'success': True, 'task_id': task_id})
         except Exception as e:
