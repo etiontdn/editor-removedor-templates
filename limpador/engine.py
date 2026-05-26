@@ -107,12 +107,19 @@ def imread_unicode(path):
         return None
 
 def imwrite_unicode(path, img):
-    """ Salva uma imagem em um caminho que contém acentos ou caracteres especiais. """
+    """ Salva uma imagem em um caminho que contém acentos ou caracteres especiais com qualidade otimizada. """
     try:
-        ext = os.path.splitext(path)[1]
-        is_success, im_buf_arr = cv2.imencode(ext, img)
+        ext = os.path.splitext(path)[1].lower()
+        params = []
+        if ext == '.webp':
+            params = [int(cv2.IMWRITE_WEBP_QUALITY), 80]
+        elif ext in ['.jpg', '.jpeg']:
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            
+        is_success, im_buf_arr = cv2.imencode(ext, img, params)
         if is_success:
-            im_buf_arr.tofile(path)
+            with open(path, 'wb') as f:
+                f.write(im_buf_arr.tobytes())
             return True
         print(f"[DEBUG] Erro: Falha ao codificar imagem {path}")
         return False
