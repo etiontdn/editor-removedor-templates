@@ -312,45 +312,52 @@ def process_task(task_id, mother_path, selected_folders, process_transitions=Tru
             arquivos = sorted([os.path.join(folder_path, f) for f in os.listdir(folder_path) 
                               if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
 
-            # Fase 1: Individual
+            # Fase 1: Individual (processamento sequencial — OpenCV já usa todos os cores internamente,
+            # múltiplas threads Python causam oversubscription e brigam pelo GIL)
             print(f"[DEBUG] Iniciando Fase 1 (Individual) para pasta: {folder_name}")
             
             progress_lock = threading.Lock()
-            
-            # Fase 1: Individual (via Pipeline Produtor-Consumidor)
-            print(f"[DEBUG] Iniciando Fase 1 (Individual) com Pipeline para pasta: {folder_name}")
-            
-            input_queue = queue.Queue(maxsize=16)
-            output_queue = queue.Queue(maxsize=16)
-            
-            # 1. Iniciar Thread de Leitura (Produtor)
-            t_reader = threading.Thread(
-                target=reader_worker,
-                args=(arquivos, input_queue),
-                daemon=True
-            )
-            t_reader.start()
-            
-            # 2. Iniciar Threads de Processamento (Workers)
-            num_workers = 4
-            workers = []
-            for _ in range(num_workers):
-                t_worker = threading.Thread(
-                    target=processor_worker,
-                    args=(input_queue, output_queue, templates_info, THRESHOLD, task_id, folder_name, downsample_factor),
-                    daemon=True
-                )
-                t_worker.start()
-                workers.append(t_worker)
-                
-            # 3. Executar o Gravador de forma síncrona na thread principal
             bands_cache = {}
-            writer_worker(output_queue, len(arquivos), task_id, progress_lock, folder_name, templates_info, bands_cache, webp_lossless=webp_lossless)
             
-            # Garantir encerramento das threads por segurança
-            t_reader.join()
-            for w in workers:
-                w.join()
+            for f_path in arquivos:
+                PROCESSING_TASKS[task_id]['current_file'] = f"[{folder_name}] {os.path.basename(f_path)}"
+                try:
+                    img = imread_unicode(f_path)
+                    if img is not None:
+                        _, img_final, alterou = process_single_image(img, templates_info, THRESHOLD, downsample_factor=downsample_factor)
+                        
+                        if alterou and img_final is not None:
+                            print(f"[DEBUG] Imagem alterada e salva: {os.path.basename(f_path)}")
+                            imwrite_unicode(f_path, img_final, webp_lossless=webp_lossless)
+                        
+                        # Popula cache de bandas para a fase de transições
+                        try:
+                            h, w = img_final.shape[:2]
+                            max_th = 0
+                            for t_info in templates_info:
+                                cached_t = get_cached_template(t_info, w)
+                                if cached_t:
+                                    th_p = cached_t['th'] + int(t_info['padding'] * cached_t['proporcao'])
+                                    if th_p > max_th:
+                                        max_th = th_p
+                            band_height = min(h, (max_th if max_th > 0 else 250) + 32)
+                            if band_height > 0:
+                                bands_cache[f_path] = {
+                                    'top': img_final[:band_height, :].copy(),
+                                    'bottom': img_final[-band_height:, :].copy(),
+                                    'h': h
+                                }
+                        except Exception as e:
+                            print(f"[DEBUG] Erro ao construir bands_cache para {f_path}: {e}")
+                            
+                except Exception as e:
+                    print(f"[DEBUG] Erro ao processar arquivo {f_path}: {e}")
+                
+                with progress_lock:
+                    PROCESSING_TASKS[task_id]['processed_count'] += 1
+                    total = PROCESSING_TASKS[task_id]['total']
+                    if total > 0:
+                        PROCESSING_TASKS[task_id]['progress'] = int((PROCESSING_TASKS[task_id]['processed_count'] / total) * 100)
 
             # Fase 2: Transição
             if process_transitions:
